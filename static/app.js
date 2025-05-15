@@ -11,11 +11,16 @@ document.addEventListener('DOMContentLoaded', function() {
     const gotoPageInput = document.getElementById('goto-page');
     const gotoBtn = document.getElementById('goto-btn');
     const pageInfo = document.getElementById('page-info');
+    const markdownView = document.getElementById('markdown-view');
+    const editBtn = document.getElementById('edit-btn');
+    const lockBtn = document.getElementById('lock-btn');
+    const exportBtn = document.getElementById('export-btn');
 
     let pdfDoc = null;
     let currentPage = 1;
     let totalPages = 1;
     let currentFile = null;
+    let isEditingMarkdown = false;
 
     // Toggle left panel
     toggleLeft.addEventListener('click', () => {
@@ -66,39 +71,111 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Load and render PDF using PDF.js
+    // Edit/Save button functionality
+    editBtn.addEventListener('click', async () => {
+        if (isEditingMarkdown) {
+            if (!currentFile || !currentPage) {
+                alert("No file or page selected to save.");
+                return;
+            }
+            const updatedMarkdown = markdownView.value;
+            try {
+                const response = await fetch(`/save-markdown/${encodeURIComponent(currentFile)}/${currentPage}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ markdown: updatedMarkdown })
+                });
+                if (!response.ok) {
+                    const errorResult = await response.json().catch(() => ({ detail: "Unknown error saving markdown" }));
+                    throw new Error(errorResult.detail || response.statusText);
+                }
+                const result = await response.json();
+                markdownView.setAttribute('readonly', true);
+                editBtn.textContent = 'Edit';
+                editBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
+                editBtn.classList.add('bg-green-500', 'hover:bg-green-600');
+                lockBtn.style.display = 'inline-block';
+                exportBtn.style.display = 'inline-block';
+                isEditingMarkdown = false;
+            } catch (error) {
+                console.error("Error saving markdown:", error);
+                alert(`Error saving: ${error.message}`);
+            }
+        } else {
+            markdownView.removeAttribute('readonly');
+            editBtn.textContent = 'Save';
+            editBtn.classList.remove('bg-green-500', 'hover:bg-green-600');
+            editBtn.classList.add('bg-red-500', 'hover:bg-red-600');
+            lockBtn.style.display = 'none';
+            exportBtn.style.display = 'none';
+            isEditingMarkdown = true;
+            markdownView.focus();
+        }
+    });
+
+    // Optional: Lock button to discard changes (or just disable if edit takes over)
+    lockBtn.addEventListener('click', () => {
+        if (!isEditingMarkdown) {
+            markdownView.setAttribute('readonly', true);
+            editBtn.textContent = 'Edit';
+            editBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
+            editBtn.classList.add('bg-green-500', 'hover:bg-green-600');
+            console.log("Markdown view locked (already read-only).");
+        } else {
+            alert("Click Save to commit changes or reload the page data to discard.");
+        }
+    });
+
+    // Load and render PDF using PDF.js, and trigger text extraction
     async function loadAndRenderPDF(filename) {
         console.log('loadAndRenderPDF called for:', filename);
         currentFile = filename;
-        const url = `/file/${encodeURIComponent(filename)}`;
+        markdownView.value = 'Extracting text...';
+        if (isEditingMarkdown) {
+            markdownView.setAttribute('readonly', true);
+            editBtn.textContent = 'Edit';
+            editBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
+            editBtn.classList.add('bg-green-500', 'hover:bg-green-600');
+            lockBtn.style.display = 'inline-block';
+            exportBtn.style.display = 'inline-block';
+            isEditingMarkdown = false;
+        }
 
-        // Check if pdfjsLib is available
-        console.log('Checking for pdfjsLib. typeof window.pdfjsLib:', typeof window.pdfjsLib);
-        console.log('window.pdfjsLib value:', window.pdfjsLib);
-        
-        // Attempt to use the global pdfjsLib, also checking globalThis as a fallback
+        // Trigger extraction process on the backend
+        try {
+            console.log(`Requesting extraction for ${filename}...`);
+            const extractResponse = await fetch(`/extract/${encodeURIComponent(filename)}`, {
+                method: 'POST'
+            });
+            const extractResult = await extractResponse.json();
+            if (!extractResponse.ok) {
+                console.error('Extraction request failed:', extractResult);
+                markdownView.value = `Error during extraction: ${extractResult.detail || 'Unknown error'}`;
+            } else {
+                console.log('Extraction request successful:', extractResult);
+            }
+        } catch (error) {
+            console.error('Error calling extraction endpoint:', error);
+            markdownView.value = 'Error initiating text extraction.';
+        }
+
+        const url = `/file/${encodeURIComponent(filename)}`;
         const pdfjsViewer = window.pdfjsLib || globalThis.pdfjsLib;
 
         if (!pdfjsViewer || typeof pdfjsViewer.getDocument !== 'function') {
             console.error('PDF.js library (pdfjsLib) is NOT loaded correctly or getDocument method is missing.');
-            console.error('Detected pdfjsViewer type:', typeof pdfjsViewer);
-            if(pdfjsViewer) {
-                console.error('Detected pdfjsViewer.getDocument type:', typeof pdfjsViewer.getDocument);
-            }
-            alert('Critical Error: PDF library (PDF.js) failed to load. Cannot display PDFs. Please check the browser console for errors related to "pdf.min.js" or "pdf.worker.min.js" loading from the CDN (cdnjs.cloudflare.com).');
+            alert('Critical Error: PDF library (PDF.js) failed to load.');
+            markdownView.value = 'Error: PDF viewing library not loaded.';
             return;
         }
 
         try {
             console.log('PDF.js library appears to be available. Proceeding to load PDF.');
-            
-            // The workerSrc should now be correctly set by the script in index.html
-            // pdfjsViewer.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.js`; // REMOVED THIS LINE
             console.log('Using pdfjsViewer.GlobalWorkerOptions.workerSrc:', pdfjsViewer.GlobalWorkerOptions.workerSrc);
-
             const loadingTask = pdfjsViewer.getDocument(url); 
             console.log('pdfjsViewer.getDocument called, loadingTask created.');
-
             pdfDoc = await loadingTask.promise;
             console.log('PDF document loaded successfully:', pdfDoc ? 'Loaded' : 'Failed to load');
 
@@ -111,18 +188,23 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         } catch (error) {
             console.error(`Error during PDF processing for "${filename}":`, error);
-            alert(`Failed to load or render PDF: ${filename}. An error occurred. Check console for detailed error message.`);
+            alert(`Failed to load or render PDF: ${filename}. Check console.`);
             const context = pdfCanvas.getContext('2d');
             if (context) context.clearRect(0, 0, pdfCanvas.width, pdfCanvas.height);
             pageInfo.textContent = 'Failed to load PDF';
+            markdownView.value = 'Failed to load PDF for viewing.';
             pdfDoc = null;
         }
     }
 
     async function renderPage(pageNum) {
+        if (isEditingMarkdown) {
+            console.log("Navigating page while editing. Consider save prompt.");
+        }
         if (!pdfDoc) {
             console.warn("renderPage called but pdfDoc is null or undefined.");
             pageInfo.textContent = 'Error: PDF document not loaded.';
+            markdownView.value = 'PDF not loaded. Cannot display extracted text.';
             return;
         }
         try {
@@ -139,10 +221,37 @@ document.addEventListener('DOMContentLoaded', function() {
             await page.render(renderContext).promise;
             pageInfo.textContent = `Page ${pageNum} / ${totalPages}`;
             console.log(`Page ${pageNum} rendered successfully.`);
+            fetchExtractedMarkdown(currentFile, pageNum);
         } catch (error) {
             console.error(`Error rendering page ${pageNum} for PDF "${currentFile}":`, error);
-            alert(`Error rendering page ${pageNum}. Check console for details.`);
+            alert(`Error rendering page ${pageNum}. Check console.`);
             pageInfo.textContent = `Error rendering page ${pageNum}`;
+            markdownView.value = `Error rendering PDF page ${pageNum}.`;
+        }
+    }
+
+    async function fetchExtractedMarkdown(filename, pageNum) {
+        if (!filename) return;
+        console.log(`Fetching extracted markdown for ${filename}, page ${pageNum}`);
+        if (isEditingMarkdown) {
+            console.log("Currently editing, not fetching new markdown for this page unless forced.");
+            return;
+        }
+        markdownView.value = `Loading extracted text for page ${pageNum}...`;
+        try {
+            const response = await fetch(`/extracted-markdown/${encodeURIComponent(filename)}/${pageNum}`);
+            if (!response.ok) {
+                const errorResult = await response.json().catch(() => ({ detail: "Unknown error fetching markdown" }));
+                console.error('Failed to fetch markdown:', response.status, errorResult);
+                markdownView.value = `Error loading extracted text: ${errorResult.detail || response.statusText}`;
+                return;
+            }
+            const data = await response.json();
+            markdownView.value = data.markdown || 'No text extracted for this page.';
+            console.log('Markdown loaded successfully.');
+        } catch (error) {
+            console.error('Error fetching or parsing markdown:', error);
+            markdownView.value = 'Error fetching extracted text.';
         }
     }
 
