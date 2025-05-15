@@ -1,5 +1,6 @@
 // static/app.js
 document.addEventListener('DOMContentLoaded', function() {
+    const spinnerModal = document.getElementById('spinner-modal');
     const leftPanel = document.getElementById('left-panel');
     const toggleLeft = document.getElementById('toggle-left');
     const uploadBtn = document.getElementById('upload-btn');
@@ -16,11 +17,26 @@ document.addEventListener('DOMContentLoaded', function() {
     const lockBtn = document.getElementById('lock-btn');
     const exportBtn = document.getElementById('export-btn');
 
+    // Spinner functions
+    function showSpinner(message = "Processing PDF...") {
+        if (spinnerModal) {
+            spinnerModal.querySelector('p').textContent = message;
+            spinnerModal.classList.remove('hidden');
+        }
+    }
+    function hideSpinner() {
+        if (spinnerModal) {
+            spinnerModal.classList.add('hidden');
+        }
+    }
+
     let pdfDoc = null;
     let currentPage = 1;
-    let totalPages = 1;
     let currentFile = null;
     let isEditingMarkdown = false;
+    let currentFileTotalPages = 0;
+    let highestPageExtractedLocally = 0;
+    let isPdfFullyExtracted = false;
 
     // Toggle left panel
     toggleLeft.addEventListener('click', () => {
@@ -36,39 +52,75 @@ document.addEventListener('DOMContentLoaded', function() {
     fileInput.addEventListener('change', async (e) => {
         const file = e.target.files[0];
         if (!file) return;
+        showSpinner("Uploading file...");
         const formData = new FormData();
         formData.append('file', file);
-        await fetch('/upload', {
-            method: 'POST',
-            body: formData
-        });
-        loadFileList();
+        try {
+            await fetch('/upload', { method: 'POST', body: formData });
+            await loadFileList();
+        } catch (err) {
+            console.error("Upload error:", err);
+        }
+        hideSpinner();
     });
 
     // Load file list from backend
     async function loadFileList() {
-        const res = await fetch('/files');
-        const files = await res.json();
-        fileList.innerHTML = '';
-        files.forEach(filename => {
-            const li = document.createElement('li');
-            li.textContent = filename;
-            li.className = 'file-item cursor-pointer px-2 py-1 rounded hover:bg-blue-100 break-words overflow-hidden';
-            li.style.display = 'block';
-            li.style.maxHeight = '2.8em'; // ~2 lines
-            li.style.lineHeight = '1.4em';
-            li.style.textOverflow = 'ellipsis';
-            li.style.webkitLineClamp = 2;
-            li.style.webkitBoxOrient = 'vertical';
-            li.style.overflow = 'hidden';
-            li.style.display = '-webkit-box';
-            li.title = filename; // Tooltip with full name
-            li.addEventListener('click', () => {
-                console.log('File item clicked:', filename); // Log click
-                loadAndRenderPDF(filename);
-            });
-            fileList.appendChild(li);
-        });
+        const fileListElement = document.getElementById('file-list');
+        if (!fileListElement) {
+            console.error('loadFileList Error: DOM element #file-list not found.');
+            return;
+        }
+
+        console.log('loadFileList: Attempting to fetch /files...');
+        try {
+            const response = await fetch('/files');
+            if (!response.ok) {
+                const errorText = await response.text().catch(() => "Could not retrieve error text.");
+                console.error(`loadFileList: Fetch /files failed with status ${response.status}. Response: ${errorText}`);
+                fileListElement.innerHTML = '<li class="px-2 py-1 text-red-600">Error loading files. Check console.</li>';
+                return;
+            }
+
+            const files = await response.json();
+            console.log('loadFileList: Received files from backend:', files);
+
+            fileListElement.innerHTML = ''; // Clear existing list
+
+            if (Array.isArray(files) && files.length > 0) {
+                files.forEach(filename => {
+                    const li = document.createElement('li');
+                    li.textContent = filename;
+                    li.className = 'file-item cursor-pointer px-2 py-1 rounded hover:bg-blue-100 break-words'; // Added break-words
+                    
+                    // Styles for multi-line truncation with ellipsis
+                    li.style.display = '-webkit-box';
+                    li.style.webkitLineClamp = '2'; // Number of lines to show
+                    li.style.webkitBoxOrient = 'vertical';
+                    li.style.overflow = 'hidden';
+                    li.style.lineHeight = '1.4em'; // Adjust based on your font size and desired spacing
+                    li.style.maxHeight = '2.8em'; // line-height * webkitLineClamp
+
+                    li.title = filename; // Show full name on hover
+
+                    li.addEventListener('click', () => {
+                        console.log('File item clicked:', filename);
+                        loadAndDisplayPdf(filename);
+                    });
+                    fileListElement.appendChild(li);
+                });
+                console.log(`loadFileList: Added ${files.length} files to the list.`);
+            } else if (Array.isArray(files) && files.length === 0) {
+                console.log('loadFileList: No files returned from backend.');
+                fileListElement.innerHTML = '<li class="px-2 py-1 text-gray-500">No files uploaded yet.</li>';
+            } else {
+                console.error('loadFileList: Backend did not return a valid array of files.', files);
+                fileListElement.innerHTML = '<li class="px-2 py-1 text-red-600">Invalid file data from server.</li>';
+            }
+        } catch (error) {
+            console.error('loadFileList: Unexpected error:', error);
+            fileListElement.innerHTML = '<li class="px-2 py-1 text-red-600">Failed to load files. Check console.</li>';
+        }
     }
 
     // Edit/Save button functionality
@@ -128,11 +180,15 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Load and render PDF using PDF.js, and trigger text extraction
-    async function loadAndRenderPDF(filename) {
-        console.log('loadAndRenderPDF called for:', filename);
+    // Main function to load PDF, trigger initial extraction, and render first page
+    async function loadAndDisplayPdf(filename) {
+        console.log('loadAndDisplayPdf for:', filename);
         currentFile = filename;
-        markdownView.value = 'Extracting text...';
+        currentPage = 1;
+        highestPageExtractedLocally = 0;
+        isPdfFullyExtracted = false;
+        pdfDoc = null;
+
         if (isEditingMarkdown) {
             markdownView.setAttribute('readonly', true);
             editBtn.textContent = 'Edit';
@@ -142,138 +198,158 @@ document.addEventListener('DOMContentLoaded', function() {
             exportBtn.style.display = 'inline-block';
             isEditingMarkdown = false;
         }
+        markdownView.value = 'Preparing PDF...';
+        pageInfo.textContent = 'Page ? / ?';
 
-        // Trigger extraction process on the backend
+        showSpinner(`Fetching info for ${filename}...`);
+
         try {
-            console.log(`Requesting extraction for ${filename}...`);
-            const extractResponse = await fetch(`/extract/${encodeURIComponent(filename)}`, {
-                method: 'POST'
-            });
-            const extractResult = await extractResponse.json();
-            if (!extractResponse.ok) {
-                console.error('Extraction request failed:', extractResult);
-                markdownView.value = `Error during extraction: ${extractResult.detail || 'Unknown error'}`;
-            } else {
-                console.log('Extraction request successful:', extractResult);
+            const extractInfo = await triggerExtraction(filename, 1);
+            currentFileTotalPages = extractInfo.totalPages;
+            highestPageExtractedLocally = extractInfo.lastPageExtractedInBatch;
+            isPdfFullyExtracted = extractInfo.isProcessingComplete;
+            pageInfo.textContent = `Page ${currentPage} / ${currentFileTotalPages}`;
+
+            const url = `/file/${encodeURIComponent(filename)}`;
+            const pdfjsViewer = window.pdfjsLib || globalThis.pdfjsLib;
+            if (!pdfjsViewer || typeof pdfjsViewer.getDocument !== 'function') {
+                throw new Error('PDF.js library not loaded.');
             }
-        } catch (error) {
-            console.error('Error calling extraction endpoint:', error);
-            markdownView.value = 'Error initiating text extraction.';
-        }
-
-        const url = `/file/${encodeURIComponent(filename)}`;
-        const pdfjsViewer = window.pdfjsLib || globalThis.pdfjsLib;
-
-        if (!pdfjsViewer || typeof pdfjsViewer.getDocument !== 'function') {
-            console.error('PDF.js library (pdfjsLib) is NOT loaded correctly or getDocument method is missing.');
-            alert('Critical Error: PDF library (PDF.js) failed to load.');
-            markdownView.value = 'Error: PDF viewing library not loaded.';
-            return;
-        }
-
-        try {
-            console.log('PDF.js library appears to be available. Proceeding to load PDF.');
-            console.log('Using pdfjsViewer.GlobalWorkerOptions.workerSrc:', pdfjsViewer.GlobalWorkerOptions.workerSrc);
-            const loadingTask = pdfjsViewer.getDocument(url); 
-            console.log('pdfjsViewer.getDocument called, loadingTask created.');
+            const loadingTask = pdfjsViewer.getDocument(url);
             pdfDoc = await loadingTask.promise;
-            console.log('PDF document loaded successfully:', pdfDoc ? 'Loaded' : 'Failed to load');
+            console.log('PDF document loaded for rendering.');
+            
+            await renderPdfPage(currentPage); // This will also fetch markdown
 
-            if (pdfDoc) {
-                totalPages = pdfDoc.numPages;
-                currentPage = 1;
-                renderPage(currentPage);
-            } else {
-                throw new Error("pdfDoc is null after getDocument promise resolved.");
-            }
         } catch (error) {
-            console.error(`Error during PDF processing for "${filename}":`, error);
-            alert(`Failed to load or render PDF: ${filename}. Check console.`);
-            const context = pdfCanvas.getContext('2d');
-            if (context) context.clearRect(0, 0, pdfCanvas.width, pdfCanvas.height);
-            pageInfo.textContent = 'Failed to load PDF';
-            markdownView.value = 'Failed to load PDF for viewing.';
-            pdfDoc = null;
+            console.error(`Error in loadAndDisplayPdf for "${filename}":`, error);
+            alert(`Failed to load PDF: ${error.message}. Check console.`);
+            markdownView.value = `Error loading PDF: ${error.message}`;
+            pageInfo.textContent = 'Error';
+        } finally {
+            hideSpinner();
         }
     }
 
-    async function renderPage(pageNum) {
+    // Triggers backend extraction for a given page hint
+    async function triggerExtraction(filename, pageNumHint) {
+        console.log(`Triggering extraction for ${filename}, page hint: ${pageNumHint}`);
+        showSpinner(`Processing PDF (page ${pageNumHint} batch)...`);
+        try {
+            const response = await fetch(`/extract/${encodeURIComponent(filename)}?page_hint=${pageNumHint}`, {
+                method: 'POST'
+            });
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({ detail: "Extraction request failed"}));
+                throw new Error(errData.detail);
+            }
+            const data = await response.json();
+            console.log('Extraction response:', data);
+            highestPageExtractedLocally = Math.max(highestPageExtractedLocally, data.lastPageExtractedInBatch);
+            isPdfFullyExtracted = data.isProcessingComplete;
+            currentFileTotalPages = data.totalPages;
+            return data;
+        } catch (error) {
+            console.error("Error in triggerExtraction:", error);
+            hideSpinner();
+            throw error;
+        }
+    }
+
+    // Renders the PDF page and then fetches its markdown
+    async function renderPdfPage(pageNum) {
+        if (!pdfDoc) {
+            console.warn("renderPdfPage: pdfDoc not available.");
+            markdownView.value = "PDF document not loaded.";
+            hideSpinner();
+            return;
+        }
         if (isEditingMarkdown) {
             console.log("Navigating page while editing. Consider save prompt.");
         }
-        if (!pdfDoc) {
-            console.warn("renderPage called but pdfDoc is null or undefined.");
-            pageInfo.textContent = 'Error: PDF document not loaded.';
-            markdownView.value = 'PDF not loaded. Cannot display extracted text.';
-            return;
-        }
+
         try {
-            console.log(`Rendering page ${pageNum} of ${totalPages}`);
             const page = await pdfDoc.getPage(pageNum);
             const viewport = page.getViewport({ scale: 1.5 });
             const context = pdfCanvas.getContext('2d');
             pdfCanvas.height = viewport.height;
             pdfCanvas.width = viewport.width;
-            const renderContext = {
-                canvasContext: context,
-                viewport: viewport
-            };
-            await page.render(renderContext).promise;
-            pageInfo.textContent = `Page ${pageNum} / ${totalPages}`;
-            console.log(`Page ${pageNum} rendered successfully.`);
-            fetchExtractedMarkdown(currentFile, pageNum);
+            await page.render({ canvasContext: context, viewport: viewport }).promise;
+            pageInfo.textContent = `Page ${pageNum} / ${currentFileTotalPages}`;
+            console.log(`PDF Page ${pageNum} rendered.`);
+            await fetchExtractedMarkdown(currentFile, pageNum);
         } catch (error) {
-            console.error(`Error rendering page ${pageNum} for PDF "${currentFile}":`, error);
-            alert(`Error rendering page ${pageNum}. Check console.`);
-            pageInfo.textContent = `Error rendering page ${pageNum}`;
+            console.error(`Error rendering PDF page ${pageNum}:`, error);
             markdownView.value = `Error rendering PDF page ${pageNum}.`;
         }
     }
 
+    // Fetches (and triggers extraction if needed) and displays markdown
     async function fetchExtractedMarkdown(filename, pageNum) {
         if (!filename) return;
-        console.log(`Fetching extracted markdown for ${filename}, page ${pageNum}`);
-        if (isEditingMarkdown) {
-            console.log("Currently editing, not fetching new markdown for this page unless forced.");
-            return;
-        }
-        markdownView.value = `Loading extracted text for page ${pageNum}...`;
-        try {
-            const response = await fetch(`/extracted-markdown/${encodeURIComponent(filename)}/${pageNum}`);
-            if (!response.ok) {
-                const errorResult = await response.json().catch(() => ({ detail: "Unknown error fetching markdown" }));
-                console.error('Failed to fetch markdown:', response.status, errorResult);
-                markdownView.value = `Error loading extracted text: ${errorResult.detail || response.statusText}`;
+        console.log(`Fetching markdown for ${filename}, page ${pageNum}. Highest extracted: ${highestPageExtractedLocally}`);
+        let extractionWasTriggered = false;
+
+        if (pageNum > highestPageExtractedLocally && !isPdfFullyExtracted) {
+            console.log(`Page ${pageNum} not yet extracted. Triggering extraction.`);
+            extractionWasTriggered = true;
+            try {
+                await triggerExtraction(filename, pageNum);
+            } catch (error) {
+                markdownView.value = `Error during on-demand extraction: ${error.message}`;
                 return;
             }
+        }
+        
+        markdownView.value = `Loading text for page ${pageNum}...`;
+
+        try {
+            const response = await fetch(`/extracted-markdown/${encodeURIComponent(filename)}/${pageNum}`);
+            if (!response.ok) throw new Error(`Server error ${response.status} fetching markdown.`);
             const data = await response.json();
-            markdownView.value = data.markdown || 'No text extracted for this page.';
-            console.log('Markdown loaded successfully.');
+
+            if (data.status === 'not_found' && !isPdfFullyExtracted && !extractionWasTriggered) {
+                console.warn(`Markdown for page ${pageNum} not found, but not fully extracted. User might need to navigate to trigger.`);
+                markdownView.value = "Text not yet available. Navigate to this page again to attempt extraction.";
+            } else if (data.status === 'not_found' && isPdfFullyExtracted) {
+                markdownView.value = 'No text found or extracted for this page (fully processed).';
+            } else {
+                markdownView.value = data.markdown || 'No text extracted for this page.';
+            }
+            console.log(`Markdown for page ${pageNum} loaded.`);
         } catch (error) {
-            console.error('Error fetching or parsing markdown:', error);
-            markdownView.value = 'Error fetching extracted text.';
+            console.error('Error fetching markdown:', error);
+            markdownView.value = `Error loading extracted text: ${error.message}`;
         }
     }
 
+    // Event listeners for page navigation
     prevPageBtn.addEventListener('click', () => {
         if (currentPage > 1) {
             currentPage--;
-            renderPage(currentPage);
+            renderPdfPage(currentPage);
         }
     });
     nextPageBtn.addEventListener('click', () => {
-        if (currentPage < totalPages) {
+        if (currentPage < currentFileTotalPages) { // Use dynamic total pages
             currentPage++;
-            renderPage(currentPage);
+            renderPdfPage(currentPage);
         }
     });
     gotoBtn.addEventListener('click', () => {
         const page = parseInt(gotoPageInput.value);
-        if (page >= 1 && page <= totalPages) {
+        if (page >= 1 && page <= currentFileTotalPages) {
             currentPage = page;
-            renderPage(currentPage);
+            renderPdfPage(currentPage);
         }
     });
 
-    loadFileList();
+    // Initial file list load
+    loadFileList().then(() => {
+        console.log("Initial file list loaded call completed successfully.");
+    }).catch(err => {
+        console.error("Initial file list load call failed (promise rejection):", err);
+    });
+    // NOTE: loadFileList in app.js needs to call loadAndDisplayPdf on item click
+    // Make sure the click handler in loadFileList calls `loadAndDisplayPdf(filename);`
 });

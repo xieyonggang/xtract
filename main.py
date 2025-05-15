@@ -1,15 +1,16 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel # Added for request body model
 import os
 import pdfplumber # Added for PDF processing
-from typing import List
+from typing import List, Optional # Added Optional
 
 UPLOAD_DIR = "uploaded_files"
 EXTRACTED_DIR = "extracted"
 STATIC_DIR = "static"
+BATCH_SIZE = 5 # Number of pages to extract in one go
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(EXTRACTED_DIR, exist_ok=True)
@@ -40,6 +41,12 @@ async def upload_file(file: UploadFile = File(...)):
     file_location = os.path.join(UPLOAD_DIR, file.filename)
     with open(file_location, "wb") as f:
         f.write(await file.read())
+    # Clear any old extracted content for this file if re-uploaded
+    file_base, _ = os.path.splitext(file.filename)
+    output_dir_for_file = os.path.join(EXTRACTED_DIR, file_base)
+    if os.path.exists(output_dir_for_file):
+        for item in os.listdir(output_dir_for_file):
+            os.remove(os.path.join(output_dir_for_file, item))
     return {"filename": file.filename}
 
 @app.get("/files")
@@ -54,7 +61,7 @@ def get_file(filename: str):
     return FileResponse(file_path)
 
 @app.post("/extract/{filename}")
-def extract_pdf_text(filename: str):
+def extract_pdf_text(filename: str, page_hint: Optional[int] = Query(1)):
     pdf_path = os.path.join(UPLOAD_DIR, filename)
     if not os.path.exists(pdf_path):
         raise HTTPException(status_code=404, detail="PDF file not found")
@@ -65,14 +72,62 @@ def extract_pdf_text(filename: str):
 
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            num_pages = len(pdf.pages)
-            for i, page in enumerate(pdf.pages):
-                text = page.extract_text()
-                # Ensure text is not None before writing
-                page_md_filename = f"page_{i + 1}.md"
-                with open(os.path.join(output_dir_for_file, page_md_filename), "w", encoding="utf-8") as f:
-                    f.write(text or "") # Write empty string if text is None
-            return JSONResponse(content={"status": "Extraction complete", "filename": filename, "pages_processed": num_pages})
+            total_pages_in_pdf = len(pdf.pages)
+            if page_hint > total_pages_in_pdf:
+                page_hint = total_pages_in_pdf # Cap page_hint
+            
+            # Determine the highest page already extracted
+            highest_extracted = 0
+            for i in range(1, total_pages_in_pdf + 1):
+                if os.path.exists(os.path.join(output_dir_for_file, f"page_{i}.md")):
+                    highest_extracted = i
+                else:
+                    break # Found the first unextracted page
+
+            start_page_for_batch = highest_extracted + 1
+            # If page_hint is higher than what we've extracted + 1, it implies a jump
+            # For simplicity now, we'll just try to extract starting from page_hint if it's not yet covered
+            # A more sophisticated logic could check if page_hint is already within a processed batch.
+            if page_hint > highest_extracted:
+                 start_page_for_batch = page_hint 
+            
+            # Ensure we don't try to extract beyond the PDF
+            if start_page_for_batch > total_pages_in_pdf:
+                return JSONResponse(content={
+                    "status": "All pages already processed or requested page out of bounds.",
+                    "filename": filename,
+                    "totalPages": total_pages_in_pdf,
+                    "lastPageExtractedInBatch": highest_extracted,
+                    "isProcessingComplete": True
+                })
+
+            end_page_for_batch = min(start_page_for_batch + BATCH_SIZE - 1, total_pages_in_pdf)
+            pages_processed_this_call = 0
+            last_page_actually_extracted = highest_extracted
+
+            for i in range(start_page_for_batch, end_page_for_batch + 1):
+                if not os.path.exists(os.path.join(output_dir_for_file, f"page_{i}.md")):
+                    page = pdf.pages[i-1] # pdf.pages is 0-indexed
+                    text = page.extract_text()
+                    page_md_filename = f"page_{i}.md"
+                    with open(os.path.join(output_dir_for_file, page_md_filename), "w", encoding="utf-8") as f:
+                        f.write(text or "") 
+                    pages_processed_this_call += 1
+                    last_page_actually_extracted = i
+                else:
+                    # If we encounter an already extracted page within the intended batch (e.g. due to page_hint jump)
+                    # we can assume this part is done. For a simpler batch logic, we might just update last_page_actually_extracted.
+                    last_page_actually_extracted = max(last_page_actually_extracted, i)
+            
+            is_processing_complete = last_page_actually_extracted >= total_pages_in_pdf
+
+            return JSONResponse(content={
+                "status": f"{pages_processed_this_call} pages processed in this batch.", 
+                "filename": filename, 
+                "totalPages": total_pages_in_pdf,
+                "lastPageExtractedInBatch": last_page_actually_extracted,
+                "isProcessingComplete": is_processing_complete
+            })
     except Exception as e:
         # Log the exception for server-side debugging
         print(f"Error during PDF extraction for {filename}: {e}")
@@ -84,14 +139,12 @@ def get_extracted_markdown(filename: str, page_num: int):
     page_md_path = os.path.join(EXTRACTED_DIR, file_base, f"page_{page_num}.md")
 
     if not os.path.exists(page_md_path):
-        # If specific page not found, maybe it was blank or extraction is pending
-        # For now, return empty or a specific message
-        return JSONResponse(content={"filename": filename, "page": page_num, "markdown": ""}, status_code=200)
-        # Or raise HTTPException(status_code=404, detail=f"Extracted markdown for page {page_num} of {filename} not found.")
+        # This now implies the frontend should trigger /extract if this page is needed and not yet processed.
+        return JSONResponse(content={"filename": filename, "page": page_num, "markdown": "", "status": "not_found"}, status_code=200)
 
     with open(page_md_path, "r", encoding="utf-8") as f:
         markdown_content = f.read()
-    return JSONResponse(content={"filename": filename, "page": page_num, "markdown": markdown_content})
+    return JSONResponse(content={"filename": filename, "page": page_num, "markdown": markdown_content, "status": "found"})
 
 @app.post("/save-markdown/{filename}/{page_num}")
 def save_edited_markdown(filename: str, page_num: int, request_data: MarkdownSaveRequest):

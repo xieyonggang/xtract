@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Xtract PDF to Markdown</title>
     <script src="https://cdn.tailwindcss.com"></script>
+
     <!-- PDF.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script>
@@ -30,7 +31,7 @@
         <!-- Middle Panel -->
         <div id="middle-panel" class="flex flex-col flex-1 bg-gray-50 p-4 overflow-hidden">
             <div id="pdf-preview" class="flex-1 w-full flex items-center justify-center bg-white border border-gray-200 rounded-md overflow-auto">
-                <canvas id="pdf-canvas" class="max-w-full max-h-full"></canvas> 
+                <canvas id="pdf-canvas" class="max-w-full max-h-full"></canvas>
             </div>
             <div id="pdf-controls" class="flex items-center justify-center gap-2 p-4 bg-gray-100 border-t border-gray-200 mt-4 rounded-md">
                 <button id="prev-page" class="px-3 py-1 rounded bg-gray-300 hover:bg-gray-400 text-gray-800">Prev</button>
@@ -42,12 +43,20 @@
         </div>
         <!-- Right Panel -->
         <div id="right-panel" class="flex flex-col flex-1 bg-white border-l border-gray-200 min-w-[200px] p-4 overflow-hidden">
-            <div id="right-panel-header" class="flex gap-2 items-center px-4 py-2 bg-gray-50 border-b border-gray-200 mb-4 rounded-md">
+            <textarea id="markdown-view" readonly class="flex-1 w-full border border-gray-200 rounded-md resize-none p-4 text-base bg-gray-50 text-gray-800 font-mono mb-4"></textarea>
+            <div id="markdown-controls" class="flex items-center justify-start gap-2 p-4 bg-gray-100 border-t border-gray-200 rounded-md">
                 <button id="edit-btn" class="px-3 py-1 rounded bg-green-500 text-white hover:bg-green-600">Edit</button>
                 <button id="lock-btn" class="px-3 py-1 rounded bg-gray-400 text-white hover:bg-gray-500">Lock</button>
                 <button id="export-btn" class="px-3 py-1 rounded bg-indigo-500 text-white hover:bg-indigo-600">Export</button>
             </div>
-            <textarea id="markdown-view" readonly class="flex-1 w-full border border-gray-200 rounded-md resize-none p-4 text-base bg-gray-50 text-gray-800 font-mono"></textarea>
+        </div>
+    </div>
+
+    <!-- Spinner Modal -->
+    <div id="spinner-modal" class="fixed inset-0 bg-gray-800 bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-5 rounded-lg flex flex-col items-center">
+            <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+            <p class="mt-3 text-gray-700">Processing PDF...</p>
         </div>
     </div>
 </body>
