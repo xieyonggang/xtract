@@ -1,0 +1,18 @@
+# Project Requirement
+
+i want to create an application that helps to extract pdf documents into markdown text format, this application should have functionality to verify if the document extraction is correct and provide functionality to edit the extracted markdown text if the content is not correct. take note that the pdf might content charts, please extract that back to numbers in tables. if there is an image, please help to extract that image as well.  the application should be have option to exprt that extracted content to microsoft words, or text format. 
+ 
+
+1. On UI design, please have a 3 panel design. The app should have an interface of narrow left panel where i could list out all the files that i have uploaded,  bottom of the left panel should have a button for me to upload a file, click on the upload button will allow me to upload a file into system and the file list should be updated. This panel is a collapsible throught a toggle button on the top of the panel.  each of the file is single clickable, once clicked on the file, the  pdf file will be open on the middle panel
+
+For the middle panel of the app, it should display the pdf file preview, the upper 75% of this panel is to display the PDF in a single page format.  on the buttom part of the panel, has a list of control to go to previous, next , x page of the PDF file. once the file is loaded, please display the first page of the pdf file 
+
+on the right hand side, it will display the extracted markdown text of the pdf.  when the PDF is navigated to next page in middle panel, the right hand panel should display the corresponding extracted markdown page.  on top of the panel, it should have an edit button, an lock from edit button and an export option.  when click on the export, it should have the option to export the content of the current page into microsoft word, or text format. 
+
+in order to extract the pdf content, we could use a combination of OCR and GenAI,  if LLM is needed, we will use google gemini 2.5 pro as LLM AI, for OCR please choose the best pdf reader out there. 
+
+please note that the PDF file could be 200 to 500 pages, and full of text and charts, tables and etc, therefore, when choosing technology for PDF parsing, plaese consider the performance and reliablity
+
+# Project Technology
+
+Use python as the primary technology, for front end, use simple CSS would be ok, avoiding using many packages 

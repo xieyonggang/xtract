@@ -1,0 +1,7 @@
+# Requires Python 3.11
+fastapi
+uvicorn
+python-multipart
+pdfplumber
+pytesseract
+Pillow 
