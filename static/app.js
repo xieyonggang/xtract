@@ -2,7 +2,7 @@
 document.addEventListener('DOMContentLoaded', function() {
     const spinnerModal = document.getElementById('spinner-modal');
     const leftPanel = document.getElementById('left-panel');
-    const toggleLeft = document.getElementById('toggle-left');
+    const panelToggle = document.getElementById('panel-toggle');
     const uploadBtn = document.getElementById('upload-btn');
     const fileInput = document.getElementById('file-input');
     const fileList = document.getElementById('file-list');
@@ -41,10 +41,37 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentFileTotalPages = 0;
     let highestPageExtractedLocally = 0;
     let isPdfFullyExtracted = false;
+    let isPanelCollapsed = false;
 
-    // Toggle left panel
-    toggleLeft.addEventListener('click', () => {
-        leftPanel.classList.toggle('collapsed');
+    // Panel toggle functionality
+    panelToggle.addEventListener('click', () => {
+        isPanelCollapsed = !isPanelCollapsed;
+        leftPanel.classList.toggle('w-60');
+        leftPanel.classList.toggle('w-10'); // Narrower collapsed width
+        leftPanel.classList.toggle('p-4');
+        leftPanel.classList.toggle('p-0');
+        
+        const icon = panelToggle.querySelector('.panel-toggle-icon');
+        icon.style.transform = isPanelCollapsed ? 'rotate(180deg)' : 'rotate(0deg)';
+        
+        const fileList = document.getElementById('file-list');
+        const uploadBtn = document.getElementById('upload-btn');
+        const uploadSection = document.getElementById('upload-section');
+        const uploadSectionFlexContainer = uploadSection.querySelector('.flex'); // Target the inner flex container
+        
+        if (isPanelCollapsed) {
+            fileList.style.display = 'none';
+            uploadBtn.style.display = 'none';
+            uploadSectionFlexContainer.style.justifyContent = 'center'; // Center the lone toggle button
+            // Adjust padding of the upload-section itself if left-panel p-0 makes it too tight
+            uploadSection.style.padding = '0.5rem'; // Give some padding when panel is p-0
+
+        } else {
+            fileList.style.display = 'block';
+            uploadBtn.style.display = 'block'; // Or 'flex' if needed, but 'block' for button is fine with flex-1 parent
+            uploadSectionFlexContainer.style.justifyContent = 'initial'; // Reset justification
+            uploadSection.style.padding = ''; // Reset to CSS defined padding (p-4 from HTML)
+        }
     });
 
     // Upload button triggers file input
@@ -95,15 +122,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 files.forEach(filename => {
                     const li = document.createElement('li');
                     li.textContent = filename;
-                    li.className = 'file-item cursor-pointer px-2 py-1 rounded hover:bg-blue-100 break-words'; // Added break-words
+                    li.className = 'file-item cursor-pointer px-3 py-1.5 rounded hover:bg-blue-100 break-words text-sm text-gray-700 mb-2 truncate'; // Added truncate
                     
-                    // Styles for multi-line truncation with ellipsis
-                    li.style.display = '-webkit-box';
-                    li.style.webkitLineClamp = '2'; // Number of lines to show
-                    li.style.webkitBoxOrient = 'vertical';
+                    // Styles for single-line truncation with ellipsis
+                    li.style.display = 'block';
                     li.style.overflow = 'hidden';
-                    li.style.lineHeight = '1.4em'; // Adjust based on your font size and desired spacing
-                    li.style.maxHeight = '2.8em'; // line-height * webkitLineClamp
+                    li.style.textOverflow = 'ellipsis';
+                    li.style.whiteSpace = 'nowrap';
+                    li.style.lineHeight = '1.3em';
 
                     li.title = filename; // Show full name on hover
 
@@ -370,12 +396,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Initial file list load
-    loadFileList().then(() => {
-        console.log("Initial file list loaded call completed successfully.");
-    }).catch(err => {
-        console.error("Initial file list load call failed (promise rejection):", err);
-    });
-    // NOTE: loadFileList in app.js needs to call loadAndDisplayPdf on item click
-    // Make sure the click handler in loadFileList calls `loadAndDisplayPdf(filename);`
+    // Initial load
+    loadFileList();
 });
