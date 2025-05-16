@@ -14,7 +14,35 @@ document.addEventListener('DOMContentLoaded', function() {
     const markdownView = document.getElementById('markdown-view');
     const editBtn = document.getElementById('edit-btn');
     const refreshBtn = document.getElementById('refresh-btn');
-    const exportBtn = document.getElementById('export-btn');
+    const exportBtnToggle = document.getElementById('export-btn-toggle');
+    const exportDropdown = document.getElementById('export-dropdown');
+    const exportTxtBtn = document.getElementById('export-txt-btn');
+    const exportDocxBtn = document.getElementById('export-docx-btn');
+
+    const pencilIconSVG = `<svg class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor"><path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" /><path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clip-rule="evenodd" /></svg>`;
+    const saveIconSVG = `<svg class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>`;
+
+    // Set initial icon for edit button
+    editBtn.innerHTML = pencilIconSVG;
+
+    // Helper function to update the state of markdown controls
+    function updateMarkdownControlsState(disable) {
+        const controls = [editBtn, refreshBtn, exportBtnToggle];
+        controls.forEach(button => {
+            button.disabled = disable;
+            if (disable) {
+                button.classList.add('opacity-50', 'cursor-not-allowed');
+            } else {
+                button.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        });
+        if (disable) {
+            exportDropdown.classList.add('hidden');
+        }
+    }
+
+    // Initial state: disable markdown controls
+    updateMarkdownControlsState(true);
 
     // Spinner functions
     function showSpinner(message = "Processing PDF...") {
@@ -249,11 +277,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 const result = await response.json();
                 markdownView.setAttribute('readonly', true);
-                editBtn.textContent = 'Edit';
+                editBtn.innerHTML = pencilIconSVG;
+                editBtn.title = "Edit text";
                 editBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
                 editBtn.classList.add('bg-green-500', 'hover:bg-green-600');
                 refreshBtn.style.display = 'inline-flex';
-                exportBtn.style.display = 'inline-block';
+                exportBtnToggle.style.display = 'inline-flex';
                 isEditingMarkdown = false;
             } catch (error) {
                 console.error("Error saving markdown:", error);
@@ -261,11 +290,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         } else {
             markdownView.removeAttribute('readonly');
-            editBtn.textContent = 'Save';
+            editBtn.innerHTML = saveIconSVG;
+            editBtn.title = "Save changes";
             editBtn.classList.remove('bg-green-500', 'hover:bg-green-600');
             editBtn.classList.add('bg-red-500', 'hover:bg-red-600');
             refreshBtn.style.display = 'none';
-            exportBtn.style.display = 'none';
+            exportBtnToggle.style.display = 'none';
+            exportDropdown.classList.add('hidden');
             isEditingMarkdown = true;
             markdownView.focus();
         }
@@ -313,11 +344,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (isEditingMarkdown) {
             markdownView.setAttribute('readonly', true);
-            editBtn.textContent = 'Edit';
+            editBtn.innerHTML = pencilIconSVG;
+            editBtn.title = "Edit text";
             editBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
             editBtn.classList.add('bg-green-500', 'hover:bg-green-600');
             refreshBtn.style.display = 'inline-flex';
-            exportBtn.style.display = 'inline-block';
+            exportBtnToggle.style.display = 'inline-flex';
             isEditingMarkdown = false;
         }
         markdownView.value = 'Preparing PDF...';
@@ -341,15 +373,26 @@ document.addEventListener('DOMContentLoaded', function() {
             pdfDoc = await loadingTask.promise;
             console.log('PDF document loaded for rendering.');
             
-            await renderPdfPage(currentPage); // This will also fetch markdown
-
+            // PDF successfully loaded, enable controls
+            updateMarkdownControlsState(false);
+            
+            await renderPdfPage(currentPage);
         } catch (error) {
             console.error(`Error in loadAndDisplayPdf for "${filename}":`, error);
             alert(`Failed to load PDF: ${error.message}. Check console.`);
             markdownView.value = `Error loading PDF: ${error.message}`;
             pageInfo.textContent = 'Error';
+            currentFile = null; // Clear current file on error
+            updateMarkdownControlsState(true); // Disable controls on error
         } finally {
             hideSpinner();
+            // Ensure export button visibility is correct based on edit mode, even after load
+            if (!isEditingMarkdown && currentFile) { // only if a file is active
+                exportBtnToggle.style.display = 'inline-flex';
+            } else if (!currentFile) { // no file active
+                 exportBtnToggle.style.display = 'none';
+            }
+            // Edit and Refresh buttons visibility is handled by their disabled state now
         }
     }
 
@@ -485,6 +528,77 @@ document.addEventListener('DOMContentLoaded', function() {
         if (page >= 1 && page <= currentFileTotalPages) {
             currentPage = page;
             renderPdfPage(currentPage);
+        }
+    });
+
+    // Export functionality
+    exportBtnToggle.addEventListener('click', (event) => {
+        event.stopPropagation(); // Prevent click from immediately closing dropdown via window listener
+        exportDropdown.classList.toggle('hidden');
+    });
+
+    // Close dropdown if clicked outside
+    window.addEventListener('click', (event) => {
+        if (!exportBtnToggle.contains(event.target) && !exportDropdown.contains(event.target)) {
+            exportDropdown.classList.add('hidden');
+        }
+    });
+
+    // Helper function to trigger file download
+    function triggerDownload(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        exportDropdown.classList.add('hidden'); // Hide dropdown after action
+    }
+
+    // Export as Text
+    exportTxtBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (!currentFile || !markdownView.value.trim()) {
+            alert("No content to export or no file active.");
+            exportDropdown.classList.add('hidden');
+            return;
+        }
+        const textContent = markdownView.value;
+        const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+        const filename = `${currentFile.split('.').slice(0, -1).join('.')}_page${currentPage}.txt`;
+        triggerDownload(blob, filename);
+    });
+
+    // Export as Word (.docx)
+    exportDocxBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        if (!currentFile || !markdownView.value.trim()) {
+            alert("No content to export or no file active.");
+            exportDropdown.classList.add('hidden');
+            return;
+        }
+        const textContent = markdownView.value;
+        const { Document, Packer, Paragraph, TextRun } = docx; // docx.js library objects
+
+        const paragraphs = textContent.split('\n').map(line => new Paragraph({ children: [new TextRun(line)] }));
+
+        const doc = new Document({
+            sections: [{
+                properties: {},
+                children: paragraphs.length > 0 ? paragraphs : [new Paragraph({ children: [new TextRun("")] })], // Ensure at least one empty paragraph if no content
+            }]
+        });
+
+        try {
+            const blob = await Packer.toBlob(doc);
+            const filename = `${currentFile.split('.').slice(0, -1).join('.')}_page${currentPage}.docx`;
+            triggerDownload(blob, filename);
+        } catch (error) {
+            console.error("Error generating .docx file:", error);
+            alert("Failed to generate .docx file. See console for details.");
+            exportDropdown.classList.add('hidden');
         }
     });
 
