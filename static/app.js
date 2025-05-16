@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const pageInfo = document.getElementById('page-info');
     const markdownView = document.getElementById('markdown-view');
     const editBtn = document.getElementById('edit-btn');
-    const lockBtn = document.getElementById('lock-btn');
+    const refreshBtn = document.getElementById('refresh-btn');
     const exportBtn = document.getElementById('export-btn');
 
     // Spinner functions
@@ -178,7 +178,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 editBtn.textContent = 'Edit';
                 editBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
                 editBtn.classList.add('bg-green-500', 'hover:bg-green-600');
-                lockBtn.style.display = 'inline-block';
+                refreshBtn.style.display = 'inline-flex';
                 exportBtn.style.display = 'inline-block';
                 isEditingMarkdown = false;
             } catch (error) {
@@ -190,23 +190,41 @@ document.addEventListener('DOMContentLoaded', function() {
             editBtn.textContent = 'Save';
             editBtn.classList.remove('bg-green-500', 'hover:bg-green-600');
             editBtn.classList.add('bg-red-500', 'hover:bg-red-600');
-            lockBtn.style.display = 'none';
+            refreshBtn.style.display = 'none';
             exportBtn.style.display = 'none';
             isEditingMarkdown = true;
             markdownView.focus();
         }
     });
 
-    // Optional: Lock button to discard changes (or just disable if edit takes over)
-    lockBtn.addEventListener('click', () => {
-        if (!isEditingMarkdown) {
-            markdownView.setAttribute('readonly', true);
-            editBtn.textContent = 'Edit';
-            editBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
-            editBtn.classList.add('bg-green-500', 'hover:bg-green-600');
-            console.log("Markdown view locked (already read-only).");
-        } else {
-            alert("Click Save to commit changes or reload the page data to discard.");
+    // Refresh button functionality
+    refreshBtn.addEventListener('click', async () => {
+        if (!currentFile || !currentPage) {
+            alert("No file or page selected to refresh.");
+            return;
+        }
+        if (isEditingMarkdown) {
+            alert("Please save or cancel editing before refreshing.");
+            return;
+        }
+
+        console.log(`Refreshing page ${currentPage} for file ${currentFile}`);
+        showSpinner(`Refreshing page ${currentPage}...`);
+        try {
+            const response = await fetch(`/force-extract-page/${encodeURIComponent(currentFile)}/${currentPage}`, {
+                method: 'POST'
+            });
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({ detail: "Failed to trigger page re-extraction." }));
+                throw new Error(errData.detail);
+            }
+            // Re-fetch and display the markdown for the current page
+            await fetchExtractedMarkdown(currentFile, currentPage);
+        } catch (error) {
+            console.error("Error refreshing page:", error);
+            alert(`Error refreshing page: ${error.message}`);
+        } finally {
+            hideSpinner();
         }
     });
 
@@ -224,7 +242,7 @@ document.addEventListener('DOMContentLoaded', function() {
             editBtn.textContent = 'Edit';
             editBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
             editBtn.classList.add('bg-green-500', 'hover:bg-green-600');
-            lockBtn.style.display = 'inline-block';
+            refreshBtn.style.display = 'inline-flex';
             exportBtn.style.display = 'inline-block';
             isEditingMarkdown = false;
         }

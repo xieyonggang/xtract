@@ -133,6 +133,38 @@ def extract_pdf_text(filename: str, page_hint: Optional[int] = Query(1)):
         print(f"Error during PDF extraction for {filename}: {e}")
         raise HTTPException(status_code=500, detail=f"Error during PDF extraction: {str(e)}")
 
+@app.post("/force-extract-page/{filename}/{page_num}")
+def force_extract_single_page(filename: str, page_num: int):
+    pdf_path = os.path.join(UPLOAD_DIR, filename)
+    if not os.path.exists(pdf_path):
+        raise HTTPException(status_code=404, detail="PDF file not found")
+
+    file_base, _ = os.path.splitext(filename)
+    output_dir_for_file = os.path.join(EXTRACTED_DIR, file_base)
+    os.makedirs(output_dir_for_file, exist_ok=True)
+
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            if not (0 < page_num <= len(pdf.pages)):
+                raise HTTPException(status_code=400, detail=f"Page number {page_num} is out of range for {filename}.")
+            
+            page_to_extract = pdf.pages[page_num - 1] # pdf.pages is 0-indexed
+            text = page_to_extract.extract_text()
+            
+            page_md_filename = f"page_{page_num}.md"
+            with open(os.path.join(output_dir_for_file, page_md_filename), "w", encoding="utf-8") as f:
+                f.write(text or "") 
+            
+            return JSONResponse(content={
+                "status": "success", 
+                "message": f"Page {page_num} of {filename} re-extracted and saved.",
+                "filename": filename,
+                "pageExtracted": page_num
+            })
+    except Exception as e:
+        print(f"Error during single page force extraction for {filename}, page {page_num}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error during single page extraction: {str(e)}")
+
 @app.get("/extracted-markdown/{filename}/{page_num}")
 def get_extracted_markdown(filename: str, page_num: int):
     file_base, _ = os.path.splitext(filename)
