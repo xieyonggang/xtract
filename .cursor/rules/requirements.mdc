@@ -1,3 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
 # Project Requirement
 
 i want to create an application that helps to extract pdf documents into markdown text format, this application should have functionality to verify if the document extraction is correct and provide functionality to edit the extracted markdown text if the content is not correct. take note that the pdf might content charts, please extract that back to numbers in tables. if there is an image, please help to extract that image as well.  the application should be have option to exprt that extracted content to microsoft words, or text format. 
