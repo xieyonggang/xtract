@@ -74,25 +74,89 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // Centralized function to handle file processing and uploading
+    async function handleAndUploadFile(file) {
+        if (!file) {
+            console.warn("handleAndUploadFile: No file provided.");
+            return;
+        }
+        if (file.type !== "application/pdf") {
+            alert("Please select or drop a PDF file.");
+            // Potentially clear the visual drop state if called from drop event
+            fileList.classList.remove('bg-blue-50', 'border-2', 'border-blue-400', 'border-dashed');
+            return;
+        }
+
+        showSpinner(`Uploading ${file.name}...`);
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const response = await fetch('/upload', { method: 'POST', body: formData });
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ detail: "Unknown upload error occurred." }));
+                throw new Error(errorData.detail || `Upload failed with status ${response.status}`);
+            }
+            // const result = await response.json(); // Assuming backend returns {filename: "..."}
+            // console.log('File upload successful:', result.filename);
+            await loadFileList(); // Refresh the file list
+        } catch (err) {
+            console.error("Upload error in handleAndUploadFile:", err);
+            alert(`Upload failed: ${err.message}`);
+        } finally {
+            hideSpinner();
+        }
+    }
+
     // Upload button triggers file input
     uploadBtn.addEventListener('click', () => {
         fileInput.click();
     });
 
-    // Handle file upload
+    // Handle file upload from file input
     fileInput.addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        showSpinner("Uploading file...");
-        const formData = new FormData();
-        formData.append('file', file);
-        try {
-            await fetch('/upload', { method: 'POST', body: formData });
-            await loadFileList();
-        } catch (err) {
-            console.error("Upload error:", err);
+        if (e.target.files && e.target.files.length > 0) {
+            await handleAndUploadFile(e.target.files[0]);
         }
-        hideSpinner();
+        e.target.value = null; // Reset file input to allow re-uploading the same file
+    });
+
+    // Drag and Drop functionality for the file list area
+    fileList.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        fileList.classList.add('bg-blue-50', 'border-2', 'border-blue-400', 'border-dashed');
+        console.log('Drag entered file-list');
+    });
+
+    fileList.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation(); // This is crucial to allow the drop event
+        // Optionally add more visual feedback or check file types here if desired
+    });
+
+    fileList.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // Check if the leave event is not just moving over a child element
+        if (e.target === fileList || !fileList.contains(e.relatedTarget)) {
+            fileList.classList.remove('bg-blue-50', 'border-2', 'border-blue-400', 'border-dashed');
+            console.log('Drag left file-list');
+        }
+    });
+
+    fileList.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        fileList.classList.remove('bg-blue-50', 'border-2', 'border-blue-400', 'border-dashed');
+        console.log('File dropped on file-list');
+
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+            // We'll process the first dropped file.
+            // Could be extended to handle multiple files if the backend supports it or process sequentially.
+            await handleAndUploadFile(files[0]);
+        }
     });
 
     // Load file list from backend
