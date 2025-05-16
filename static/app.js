@@ -1,4 +1,3 @@
-// static/app.js
 document.addEventListener('DOMContentLoaded', function() {
     const spinnerModal = document.getElementById('spinner-modal');
     const leftPanel = document.getElementById('left-panel');
@@ -46,8 +45,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // Panel toggle functionality
     panelToggle.addEventListener('click', () => {
         isPanelCollapsed = !isPanelCollapsed;
-        leftPanel.classList.toggle('w-60');
-        leftPanel.classList.toggle('w-10'); // Narrower collapsed width
+        leftPanel.classList.toggle('w-80');
+        leftPanel.classList.toggle('w-10');
         leftPanel.classList.toggle('p-4');
         leftPanel.classList.toggle('p-0');
         
@@ -185,17 +184,28 @@ document.addEventListener('DOMContentLoaded', function() {
             if (Array.isArray(files) && files.length > 0) {
                 files.forEach(filename => {
                     const li = document.createElement('li');
-                    li.textContent = filename;
-                    li.className = 'file-item cursor-pointer px-3 py-1.5 rounded hover:bg-blue-100 break-words text-sm text-gray-700 mb-2 truncate'; // Added truncate
-                    
-                    // Styles for single-line truncation with ellipsis
-                    li.style.display = 'block';
-                    li.style.overflow = 'hidden';
-                    li.style.textOverflow = 'ellipsis';
-                    li.style.whiteSpace = 'nowrap';
-                    li.style.lineHeight = '1.3em';
+                    li.className = 'file-item cursor-pointer px-3 py-1.5 rounded hover:bg-blue-100 mb-2 flex items-center gap-2'; // Added flex, items-center, gap-2
 
-                    li.title = filename; // Show full name on hover
+                    // PDF Icon SVG
+                    const iconSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                    iconSvg.setAttribute('class', 'w-4 h-4 flex-shrink-0');
+                    iconSvg.setAttribute('viewBox', '0 0 20 20');
+                    iconSvg.innerHTML = '<g><path d="M4 0C2.89543 0 2 0.89543 2 2V18C2 19.1046 2.89543 20 4 20H16C17.1046 20 18 19.1046 18 18V6L12 0H4Z" fill="#FFFFFF" stroke="#4B5563" stroke-width="1"/><path d="M12 0L18 6H12V0Z" fill="#E5E7EB" stroke="#4B5563" stroke-width="0.5"/><text x="5" y="15" font-family="Arial, sans-serif" font-size="6px" font-weight="bold" fill="#B91C1C">PDF</text></g>';
+                    
+                    li.appendChild(iconSvg);
+
+                    const fileNameSpan = document.createElement('span');
+                    fileNameSpan.textContent = filename;
+                    fileNameSpan.className = 'break-words text-sm text-gray-700 truncate'; // Truncation styles on the span
+                    // Styles for single-line truncation with ellipsis (already applied by truncate)
+                    fileNameSpan.style.display = 'block'; // Ensure it takes block for truncation
+                    fileNameSpan.style.overflow = 'hidden';
+                    fileNameSpan.style.textOverflow = 'ellipsis';
+                    fileNameSpan.style.whiteSpace = 'nowrap';
+                    // fileNameSpan.style.lineHeight = '1.3em'; // From previous, ensure it aligns well
+                    
+                    li.appendChild(fileNameSpan);
+                    li.title = filename; // Show full name on hover of the whole item
 
                     li.addEventListener('click', () => {
                         console.log('File item clicked:', filename);
