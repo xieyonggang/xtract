@@ -22,11 +22,15 @@ document.addEventListener('DOMContentLoaded', function() {
         if (spinnerModal) {
             spinnerModal.querySelector('p').textContent = message;
             spinnerModal.classList.remove('hidden');
+        } else {
+            console.error("showSpinner: spinnerModal element not found!");
         }
     }
     function hideSpinner() {
         if (spinnerModal) {
             spinnerModal.classList.add('hidden');
+        } else {
+            console.error("hideSpinner: spinnerModal element not found!");
         }
     }
 
@@ -234,25 +238,30 @@ document.addEventListener('DOMContentLoaded', function() {
     // Triggers backend extraction for a given page hint
     async function triggerExtraction(filename, pageNumHint) {
         console.log(`Triggering extraction for ${filename}, page hint: ${pageNumHint}`);
-        showSpinner(`Processing PDF (page ${pageNumHint} batch)...`);
+        showSpinner(`Processing PDF (page ${pageNumHint} batch)...`); 
         try {
             const response = await fetch(`/extract/${encodeURIComponent(filename)}?page_hint=${pageNumHint}`, {
                 method: 'POST'
             });
             if (!response.ok) {
                 const errData = await response.json().catch(() => ({ detail: "Extraction request failed"}));
+                console.error("triggerExtraction: Fetch not ok:", errData.detail);
                 throw new Error(errData.detail);
             }
             const data = await response.json();
-            console.log('Extraction response:', data);
+            console.log('triggerExtraction: Extraction response received from backend:', data);
             highestPageExtractedLocally = Math.max(highestPageExtractedLocally, data.lastPageExtractedInBatch);
             isPdfFullyExtracted = data.isProcessingComplete;
             currentFileTotalPages = data.totalPages;
             return data;
         } catch (error) {
-            console.error("Error in triggerExtraction:", error);
-            hideSpinner();
-            throw error;
+            console.error("Error in triggerExtraction function:", error);
+            // Spinner will be hidden by the finally block
+            throw error; // Re-throw so it can be caught by callers if necessary
+        } finally {
+            console.log("triggerExtraction: Entering finally block."); 
+            hideSpinner(); 
+            console.log("triggerExtraction: hideSpinner() called from finally block."); 
         }
     }
 
@@ -287,40 +296,57 @@ document.addEventListener('DOMContentLoaded', function() {
     // Fetches (and triggers extraction if needed) and displays markdown
     async function fetchExtractedMarkdown(filename, pageNum) {
         if (!filename) return;
-        console.log(`Fetching markdown for ${filename}, page ${pageNum}. Highest extracted: ${highestPageExtractedLocally}`);
-        let extractionWasTriggered = false;
-
-        if (pageNum > highestPageExtractedLocally && !isPdfFullyExtracted) {
-            console.log(`Page ${pageNum} not yet extracted. Triggering extraction.`);
-            extractionWasTriggered = true;
-            try {
-                await triggerExtraction(filename, pageNum);
-            } catch (error) {
-                markdownView.value = `Error during on-demand extraction: ${error.message}`;
-                return;
-            }
-        }
+        console.log(`Fetching markdown for ${filename}, page ${pageNum}. Highest extracted: ${highestPageExtractedLocally}, Fully extracted: ${isPdfFullyExtracted}`);
         
         markdownView.value = `Loading text for page ${pageNum}...`;
-
+        let data;
         try {
             const response = await fetch(`/extracted-markdown/${encodeURIComponent(filename)}/${pageNum}`);
-            if (!response.ok) throw new Error(`Server error ${response.status} fetching markdown.`);
-            const data = await response.json();
-
-            if (data.status === 'not_found' && !isPdfFullyExtracted && !extractionWasTriggered) {
-                console.warn(`Markdown for page ${pageNum} not found, but not fully extracted. User might need to navigate to trigger.`);
-                markdownView.value = "Text not yet available. Navigate to this page again to attempt extraction.";
-            } else if (data.status === 'not_found' && isPdfFullyExtracted) {
-                markdownView.value = 'No text found or extracted for this page (fully processed).';
-            } else {
-                markdownView.value = data.markdown || 'No text extracted for this page.';
+            if (!response.ok) {
+                // Handle non-OK responses that are not necessarily JSON
+                const errorText = await response.text().catch(() => `Server error ${response.status}`);
+                throw new Error(errorText);
             }
-            console.log(`Markdown for page ${pageNum} loaded.`);
+            data = await response.json();
         } catch (error) {
-            console.error('Error fetching markdown:', error);
+            console.error(`Initial error fetching markdown for page ${pageNum}:`, error);
             markdownView.value = `Error loading extracted text: ${error.message}`;
+            // Optional: could try to triggerExtraction here if it was a network error not a 404-like error from backend
+            return;
         }
+
+        // Now, handle the response, especially if the file was "not_found"
+        if (data.status === 'not_found') {
+            console.warn(`Markdown for page ${pageNum} not found by backend. Attempting to trigger extraction.`);
+            try {
+                await triggerExtraction(filename, pageNum); // This will show spinner for its duration
+                
+                console.log(`Re-fetching markdown for page ${pageNum} after triggering extraction.`);
+                const retryResponse = await fetch(`/extracted-markdown/${encodeURIComponent(filename)}/${pageNum}`);
+                if (!retryResponse.ok) {
+                    const retryErrorText = await retryResponse.text().catch(() => `Server error ${retryResponse.status}`);
+                    throw new Error(retryErrorText);
+                }
+                const retryData = await retryResponse.json();
+                
+                if (retryData.status === 'not_found') {
+                    markdownView.value = 'No text found on this page (extraction attempted). Might be a blank page.';
+                    console.warn(`Markdown for page ${pageNum} still not found after re-extraction attempt.`);
+                } else {
+                    markdownView.value = retryData.markdown || 'No text extracted for this page (empty after re-extraction).';
+                }
+            } catch (error) {
+                console.error(`Error during or after re-extraction attempt for page ${pageNum}:`, error);
+                markdownView.value = `Error processing page ${pageNum}: ${error.message}`;
+            }
+        } else { // data.status === 'found'
+            markdownView.value = data.markdown || 'No text extracted for this page (empty).';
+        }
+        console.log(`Markdown for page ${pageNum} processing finished.`);
+        // Spinner management: 
+        // - triggerExtraction handles its own spinner.
+        // - The main spinner from loadAndDisplayPdf is handled by its finally block.
+        // - No separate spinner for just fetching already extracted markdown is used here to avoid flashing.
     }
 
     // Event listeners for page navigation
