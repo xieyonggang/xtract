@@ -34,8 +34,12 @@
         </div>
         <!-- Middle Panel -->
         <div id="middle-panel" class="flex flex-col flex-1 bg-gray-50 p-4 overflow-hidden">
-            <div id="pdf-preview" class="flex-1 w-full flex items-center justify-center bg-white border border-gray-200 rounded-md overflow-auto">
-                <canvas id="pdf-canvas" class="max-w-full max-h-full"></canvas>
+            <div id="pdf-preview" class="flex-1 w-full flex items-center justify-center bg-white border-2 border-gray-300 border-dashed rounded-md overflow-auto relative">
+                <!-- Subtle hint for drop zone -->
+                <div id="drop-zone-hint" class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <span class="text-gray-400 text-lg select-none">Drop PDF here</span>
+                </div>
+                <canvas id="pdf-canvas" class="max-w-full max-h-full relative z-10"></canvas> <!-- canvas on top -->
             </div>
             <div id="pdf-controls" class="flex items-center justify-center gap-2 p-4 bg-gray-100 border-t border-gray-200 mt-4 rounded-md">
                 <button id="prev-page" class="px-3 py-1 rounded bg-gray-300 hover:bg-gray-400 text-gray-800">Prev</button>
@@ -64,9 +68,12 @@
                             <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
                         </svg>
                     </button>
-                    <div id="export-dropdown" class="hidden absolute left-0 bottom-full mb-2 w-48 bg-white rounded-md shadow-lg z-20 py-1 ring-1 ring-black ring-opacity-5">
-                        <a href="#" id="export-txt-btn" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Save as Text (.txt)</a>
-                        <a href="#" id="export-docx-btn" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Save as Word (.docx)</a>
+                    <div id="export-dropdown" class="hidden absolute left-0 bottom-full mb-2 w-56 bg-white rounded-md shadow-lg z-20 py-1 ring-1 ring-black ring-opacity-5">
+                        <a href="#" id="export-current-txt-btn" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Save Current as Text (.txt)</a>
+                        <a href="#" id="export-current-docx-btn" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Save Current as Word (.docx)</a>
+                        <div class="border-t border-gray-200 my-1"></div>
+                        <a href="#" id="export-all-txt-btn" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Export All Pages as Text (.txt)</a>
+                        <a href="#" id="export-all-docx-btn" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Export All Pages as Word (.docx)</a>
                     </div>
                 </div>
             </div>
