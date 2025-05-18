@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel # Added for request body model
 import os
 import pdfplumber # Added for PDF processing
+import fitz # PyMuPDF
 from typing import List, Optional # Added Optional
 
 UPLOAD_DIR = "uploaded_files"
@@ -17,9 +18,9 @@ os.makedirs(EXTRACTED_DIR, exist_ok=True)
 
 app = FastAPI()
 
-# Model for the save markdown request body
-class MarkdownSaveRequest(BaseModel):
-    markdown: str
+# Model for the save content request body
+class ContentSaveRequest(BaseModel):
+    content: str # Changed from markdown
 
 app.add_middleware(
     CORSMiddleware,
@@ -69,67 +70,66 @@ def extract_pdf_text(filename: str, page_hint: Optional[int] = Query(1)):
     file_base, _ = os.path.splitext(filename)
     output_dir_for_file = os.path.join(EXTRACTED_DIR, file_base)
     os.makedirs(output_dir_for_file, exist_ok=True)
-
+    doc = None # Initialize doc to None
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            total_pages_in_pdf = len(pdf.pages)
-            if page_hint > total_pages_in_pdf:
-                page_hint = total_pages_in_pdf # Cap page_hint
-            
-            # Determine the highest page already extracted
-            highest_extracted = 0
-            for i in range(1, total_pages_in_pdf + 1):
-                if os.path.exists(os.path.join(output_dir_for_file, f"page_{i}.md")):
-                    highest_extracted = i
-                else:
-                    break # Found the first unextracted page
+        doc = fitz.open(pdf_path) # Use PyMuPDF
+        total_pages_in_pdf = len(doc)
+        if page_hint > total_pages_in_pdf:
+            page_hint = total_pages_in_pdf
+        
+        highest_extracted = 0
+        for i in range(1, total_pages_in_pdf + 1):
+            # Check for .html files now
+            if os.path.exists(os.path.join(output_dir_for_file, f"page_{i}.html")):
+                highest_extracted = i
+            else:
+                break
 
-            start_page_for_batch = highest_extracted + 1
-            # If page_hint is higher than what we've extracted + 1, it implies a jump
-            # For simplicity now, we'll just try to extract starting from page_hint if it's not yet covered
-            # A more sophisticated logic could check if page_hint is already within a processed batch.
-            if page_hint > highest_extracted:
-                 start_page_for_batch = page_hint 
-            
-            # Ensure we don't try to extract beyond the PDF
-            if start_page_for_batch > total_pages_in_pdf:
-                return JSONResponse(content={
-                    "status": "All pages already processed or requested page out of bounds.",
-                    "filename": filename,
-                    "totalPages": total_pages_in_pdf,
-                    "lastPageExtractedInBatch": highest_extracted,
-                    "isProcessingComplete": True
-                })
-
-            end_page_for_batch = min(start_page_for_batch + BATCH_SIZE - 1, total_pages_in_pdf)
-            pages_processed_this_call = 0
-            last_page_actually_extracted = highest_extracted
-
-            for i in range(start_page_for_batch, end_page_for_batch + 1):
-                if not os.path.exists(os.path.join(output_dir_for_file, f"page_{i}.md")):
-                    page = pdf.pages[i-1] # pdf.pages is 0-indexed
-                    text = page.extract_text()
-                    page_md_filename = f"page_{i}.md"
-                    with open(os.path.join(output_dir_for_file, page_md_filename), "w", encoding="utf-8") as f:
-                        f.write(text or "") 
-                    pages_processed_this_call += 1
-                    last_page_actually_extracted = i
-                else:
-                    # If we encounter an already extracted page within the intended batch (e.g. due to page_hint jump)
-                    # we can assume this part is done. For a simpler batch logic, we might just update last_page_actually_extracted.
-                    last_page_actually_extracted = max(last_page_actually_extracted, i)
-            
-            is_processing_complete = last_page_actually_extracted >= total_pages_in_pdf
-
+        start_page_for_batch = highest_extracted + 1
+        if page_hint > highest_extracted:
+            start_page_for_batch = page_hint 
+        
+        if start_page_for_batch > total_pages_in_pdf:
+            doc.close()
             return JSONResponse(content={
-                "status": f"{pages_processed_this_call} pages processed in this batch.", 
-                "filename": filename, 
+                "status": "All pages already processed or requested page out of bounds.",
+                "filename": filename,
                 "totalPages": total_pages_in_pdf,
-                "lastPageExtractedInBatch": last_page_actually_extracted,
-                "isProcessingComplete": is_processing_complete
+                "lastPageExtractedInBatch": highest_extracted,
+                "isProcessingComplete": True,
+                "contentType": "html"
             })
+
+        end_page_for_batch = min(start_page_for_batch + BATCH_SIZE - 1, total_pages_in_pdf)
+        pages_processed_this_call = 0
+        last_page_actually_extracted = highest_extracted
+
+        for i in range(start_page_for_batch, end_page_for_batch + 1):
+            page_html_path = os.path.join(output_dir_for_file, f"page_{i}.html")
+            if not os.path.exists(page_html_path):
+                page = doc.load_page(i-1) # PyMuPDF pages are 0-indexed
+                html_content = page.get_text("html")
+                with open(page_html_path, "w", encoding="utf-8") as f:
+                    f.write(html_content or "") 
+                pages_processed_this_call += 1
+                last_page_actually_extracted = i
+            else:
+                last_page_actually_extracted = max(last_page_actually_extracted, i)
+        
+        is_processing_complete = last_page_actually_extracted >= total_pages_in_pdf
+        doc.close()
+
+        return JSONResponse(content={
+            "status": f"{pages_processed_this_call} pages processed in this batch.", 
+            "filename": filename, 
+            "totalPages": total_pages_in_pdf,
+            "lastPageExtractedInBatch": last_page_actually_extracted,
+            "isProcessingComplete": is_processing_complete,
+            "contentType": "html"
+        })
     except Exception as e:
-        # Log the exception for server-side debugging
+        if doc: # Check if doc was assigned
+            doc.close()
         print(f"Error during PDF extraction for {filename}: {e}")
         raise HTTPException(status_code=500, detail=f"Error during PDF extraction: {str(e)}")
 
@@ -144,52 +144,60 @@ def force_extract_single_page(filename: str, page_num: int):
     os.makedirs(output_dir_for_file, exist_ok=True)
 
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            if not (0 < page_num <= len(pdf.pages)):
-                raise HTTPException(status_code=400, detail=f"Page number {page_num} is out of range for {filename}.")
-            
-            page_to_extract = pdf.pages[page_num - 1] # pdf.pages is 0-indexed
-            text = page_to_extract.extract_text()
-            
-            page_md_filename = f"page_{page_num}.md"
-            with open(os.path.join(output_dir_for_file, page_md_filename), "w", encoding="utf-8") as f:
-                f.write(text or "") 
-            
-            return JSONResponse(content={
-                "status": "success", 
-                "message": f"Page {page_num} of {filename} re-extracted and saved.",
-                "filename": filename,
-                "pageExtracted": page_num
-            })
+        doc = fitz.open(pdf_path) # Use PyMuPDF
+        if not (0 < page_num <= len(doc)):
+            doc.close()
+            raise HTTPException(status_code=400, detail=f"Page number {page_num} is out of range for {filename}.")
+        
+        page_to_extract = doc.load_page(page_num - 1) # 0-indexed
+        # Get HTML output from PyMuPDF. This HTML is basic but preserves some structure.
+        # For higher fidelity, pdf2htmlEX would be an option, but adds external CLI dependency.
+        content = page_to_extract.get_text("html")
+        doc.close()
+        
+        page_content_filename = f"page_{page_num}.html" # Save as .html
+        with open(os.path.join(output_dir_for_file, page_content_filename), "w", encoding="utf-8") as f:
+            f.write(content or "") 
+        
+        return JSONResponse(content={
+            "status": "success", 
+            "message": f"Page {page_num} of {filename} re-extracted and saved as HTML.",
+            "filename": filename,
+            "pageExtracted": page_num,
+            "contentType": "html"
+        })
     except Exception as e:
+        if 'doc' in locals() and doc:
+            doc.close()
         print(f"Error during single page force extraction for {filename}, page {page_num}: {e}")
         raise HTTPException(status_code=500, detail=f"Error during single page extraction: {str(e)}")
 
-@app.get("/extracted-markdown/{filename}/{page_num}")
-def get_extracted_markdown(filename: str, page_num: int):
+@app.get("/extracted-content/{filename}/{page_num}") # Renamed from /extracted-markdown
+def get_extracted_page_content(filename: str, page_num: int): # Renamed
     file_base, _ = os.path.splitext(filename)
-    page_md_path = os.path.join(EXTRACTED_DIR, file_base, f"page_{page_num}.md")
+    page_content_path = os.path.join(EXTRACTED_DIR, file_base, f"page_{page_num}.html") # Look for .html
 
-    if not os.path.exists(page_md_path):
+    if not os.path.exists(page_content_path):
         # This now implies the frontend should trigger /extract if this page is needed and not yet processed.
-        return JSONResponse(content={"filename": filename, "page": page_num, "markdown": "", "status": "not_found"}, status_code=200)
+        # Or, it could mean that /force-extract-page should be called for HTML conversion if only .md exists
+        return JSONResponse(content={"filename": filename, "page": page_num, "html_content": "", "status": "not_found", "contentType": "html"}, status_code=200)
 
-    with open(page_md_path, "r", encoding="utf-8") as f:
-        markdown_content = f.read()
-    return JSONResponse(content={"filename": filename, "page": page_num, "markdown": markdown_content, "status": "found"})
+    with open(page_content_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+    return JSONResponse(content={"filename": filename, "page": page_num, "html_content": html_content, "status": "found", "contentType": "html"})
 
-@app.post("/save-markdown/{filename}/{page_num}")
-def save_edited_markdown(filename: str, page_num: int, request_data: MarkdownSaveRequest):
+@app.post("/save-html/{filename}/{page_num}") 
+def save_edited_html_content(filename: str, page_num: int, request_data: ContentSaveRequest): # Changed to ContentSaveRequest
     file_base, _ = os.path.splitext(filename)
     output_dir_for_file = os.path.join(EXTRACTED_DIR, file_base)
-    os.makedirs(output_dir_for_file, exist_ok=True) # Ensure directory exists
+    os.makedirs(output_dir_for_file, exist_ok=True) 
     
-    page_md_path = os.path.join(output_dir_for_file, f"page_{page_num}.md")
+    page_html_path = os.path.join(output_dir_for_file, f"page_{page_num}.html")
 
     try:
-        with open(page_md_path, "w", encoding="utf-8") as f:
-            f.write(request_data.markdown)
-        return JSONResponse(content={"status": "success", "message": f"Page {page_num} of {filename} saved."}, status_code=200)
+        with open(page_html_path, "w", encoding="utf-8") as f:
+            f.write(request_data.content) # Changed to request_data.content
+        return JSONResponse(content={"status": "success", "message": f"Page {page_num} of {filename} saved (HTML)."}, status_code=200)
     except Exception as e:
-        print(f"Error saving markdown for {filename}, page {page_num}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to save markdown: {str(e)}") 
+        print(f"Error saving HTML for {filename}, page {page_num}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save HTML: {str(e)}") 

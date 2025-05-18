@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const gotoPageInput = document.getElementById('goto-page');
     const gotoBtn = document.getElementById('goto-btn');
     const pageInfo = document.getElementById('page-info');
-    const markdownView = document.getElementById('markdown-view');
+    const contentArea = document.getElementById('content-area');
     const editBtn = document.getElementById('edit-btn');
     const refreshBtn = document.getElementById('refresh-btn');
     const exportBtnToggle = document.getElementById('export-btn-toggle');
@@ -27,11 +27,12 @@ document.addEventListener('DOMContentLoaded', function() {
     const pencilIconSVG = `<svg class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor"><path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" /><path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clip-rule="evenodd" /></svg>`;
     const saveIconSVG = `<svg class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>`;
 
-    // Set initial icon for edit button
     editBtn.innerHTML = pencilIconSVG;
 
-    // Helper function to update the state of markdown controls
-    function updateMarkdownControlsState(disable) {
+    let tinymceEditor = null;
+    let isEditingContent = false;
+
+    function updateEditorControlsState(disable) {
         const controls = [editBtn, refreshBtn, exportBtnToggle];
         controls.forEach(button => {
             button.disabled = disable;
@@ -44,12 +45,15 @@ document.addEventListener('DOMContentLoaded', function() {
         if (disable) {
             exportDropdown.classList.add('hidden');
         }
+        if (tinymceEditor && disable) {
+            tinymceEditor.mode.set('readonly');
+            isEditingContent = false;
+            editBtn.innerHTML = pencilIconSVG;
+        }
     }
 
-    // Initial state: disable markdown controls
-    updateMarkdownControlsState(true);
+    updateEditorControlsState(true);
 
-    // Spinner functions
     function showSpinner(message = "Processing PDF...") {
         if (spinnerModal) {
             spinnerModal.querySelector('p').textContent = message;
@@ -69,13 +73,84 @@ document.addEventListener('DOMContentLoaded', function() {
     let pdfDoc = null;
     let currentPage = 1;
     let currentFile = null;
-    let isEditingMarkdown = false;
     let currentFileTotalPages = 0;
     let highestPageExtractedLocally = 0;
     let isPdfFullyExtracted = false;
     let isPanelCollapsed = false;
 
-    // Panel toggle functionality
+    function initEditor(initialContent = '', readonly = true) {
+        console.log("Initializing TinyMCE. Readonly:", readonly, "Content:", initialContent.substring(0, 50));
+        
+        if (tinymce.get('content-area')) {
+            console.log("Destroying existing TinyMCE instance.");
+            tinymce.get('content-area').destroy();
+            tinymceEditor = null;
+        }
+
+        tinymce.init({
+            selector: '#content-area',
+            height: '100%',
+            readonly: readonly,
+            menubar: false,
+            toolbar: false,
+            statusbar: false,
+            skin_url: '/static/tinymce/skins/ui/oxide',
+            skin: 'oxide',
+            content_css: '/static/tinymce/skins/content/default/content.min.css',
+            plugins: [
+                'advlist', 'autolink', 'lists', 'link', 'image', 'charmap', 'preview',
+                'anchor', 'searchreplace', 'visualblocks', 'code', 'fullscreen',
+                'insertdatetime', 'media', 'table', 'help', 'wordcount'
+            ],
+            content_style: 'body { font-family:Helvetica,Arial,sans-serif; font-size:14px; transform-origin: top left; } ' +
+                           (readonly ? 'body { padding: 10px !important; margin: 0 !important; }' : ''),
+            setup: function(editor) {
+                editor.on('init', function() {
+                    console.log("TinyMCE 'init' event. Setting content.");
+                    editor.setContent(initialContent || '');
+                    tinymceEditor = editor;
+                    if (readonly && editor.getContainer()) {
+                        editor.getContainer().style.border = 'none'; 
+                    }
+                    setTimeout(() => scaleEditorContentToFit(editor), 100); 
+                });
+                editor.on('SetContent', function() {
+                    setTimeout(() => scaleEditorContentToFit(editor), 100); 
+                });
+                tinymceEditor = editor;
+            },
+            init_instance_callback: function(editor) {
+                console.log("TinyMCE 'init_instance_callback'. Editor ID: " + editor.id + ", Readonly: " + editor.mode.isReadOnly());
+                tinymceEditor = editor; 
+                if (editor.mode.isReadOnly() && editor.getContainer()) {
+                    const container = editor.getContainer();
+                    if (container) {
+                        container.classList.add('tinymce-readonly-container');
+                        editor.getBody().setAttribute('tabindex', '-1');
+                    }
+                    editor.getBody().style.padding = '10px'; 
+                    editor.getBody().style.margin = '0px';
+
+                } else if (editor.getContainer()){
+                    editor.getContainer().classList.remove('tinymce-readonly-container');
+                }
+            }
+        });
+    }
+
+    function setEditorMode(editing) {
+        console.log("setEditorMode called with editing:", editing);
+        let currentContent = '';
+        if (tinymceEditor) {
+            currentContent = tinymceEditor.getContent();
+        }
+
+        isEditingContent = editing;
+        editBtn.innerHTML = editing ? saveIconSVG : pencilIconSVG;
+        
+        initEditor(currentContent, !editing); 
+    }
+
     panelToggle.addEventListener('click', () => {
         isPanelCollapsed = !isPanelCollapsed;
         leftPanel.classList.toggle('w-80');
@@ -86,39 +161,36 @@ document.addEventListener('DOMContentLoaded', function() {
         const icon = panelToggle.querySelector('.panel-toggle-icon');
         icon.style.transform = isPanelCollapsed ? 'rotate(180deg)' : 'rotate(0deg)';
         
-        const fileList = document.getElementById('file-list');
-        const uploadBtn = document.getElementById('upload-btn');
+        const fileListElement = document.getElementById('file-list');
+        const uploadBtnElement = document.getElementById('upload-btn');
         const uploadSection = document.getElementById('upload-section');
-        const uploadSectionFlexContainer = uploadSection.querySelector('.flex'); // Target the inner flex container
+        const uploadSectionFlexContainer = uploadSection.querySelector('.flex');
         
         if (isPanelCollapsed) {
-            fileList.style.display = 'none';
-            uploadBtn.style.display = 'none';
-            uploadSectionFlexContainer.style.justifyContent = 'center'; // Center the lone toggle button
-            // Adjust padding of the upload-section itself if left-panel p-0 makes it too tight
-            uploadSection.style.padding = '0.5rem'; // Give some padding when panel is p-0
+            fileListElement.style.display = 'none';
+            uploadBtnElement.style.display = 'none';
+            uploadSectionFlexContainer.style.justifyContent = 'center';
+            uploadSection.style.padding = '0.5rem';
 
         } else {
-            fileList.style.display = 'block';
-            uploadBtn.style.display = 'block'; // Or 'flex' if needed, but 'block' for button is fine with flex-1 parent
-            uploadSectionFlexContainer.style.justifyContent = 'initial'; // Reset justification
-            uploadSection.style.padding = ''; // Reset to CSS defined padding (p-4 from HTML)
+            fileListElement.style.display = 'block';
+            uploadBtnElement.style.display = 'block';
+            uploadSectionFlexContainer.style.justifyContent = 'initial';
+            uploadSection.style.padding = '';
         }
     });
 
-    // Centralized function to handle file processing and uploading
     async function handleAndUploadFile(file) {
         if (!file) {
             console.warn("handleAndUploadFile: No file provided.");
-            return null; // Return null if no file
+            return null;
         }
         if (file.type !== "application/pdf") {
             alert("Please select or drop a PDF file.");
+            const pdfPreviewElement = document.getElementById('pdf-preview');
             fileList.classList.remove('bg-blue-50', 'border-2', 'border-blue-400', 'border-dashed');
-            // Also remove from middle panel if that's the drop target
-            const pdfPreview = document.getElementById('pdf-preview');
-            pdfPreview.classList.remove('bg-blue-50', 'border-2', 'border-blue-400', 'border-dashed');
-            return null; // Return null if not PDF
+            pdfPreviewElement.classList.remove('bg-blue-50', 'border-2', 'border-blue-400', 'border-dashed');
+            return null;
         }
 
         showSpinner(`Uploading ${file.name}...`);
@@ -131,35 +203,29 @@ document.addEventListener('DOMContentLoaded', function() {
                 const errorData = await response.json().catch(() => ({ detail: "Unknown upload error occurred." }));
                 throw new Error(errorData.detail || `Upload failed with status ${response.status}`);
             }
-            const result = await response.json(); // Backend returns {filename: "..."}
-            await loadFileList(); // Refresh the file list
-            return result.filename; // Return the filename on success
+            const result = await response.json();
+            await loadFileList();
+            return result.filename;
         } catch (err) {
             console.error("Upload error in handleAndUploadFile:", err);
             alert(`Upload failed: ${err.message}`);
-            return null; // Return null on error
+            return null;
         } finally {
             hideSpinner();
         }
     }
 
-    // Upload button triggers file input
     uploadBtn.addEventListener('click', () => {
         fileInput.click();
     });
 
-    // Handle file upload from file input
     fileInput.addEventListener('change', async (e) => {
         if (e.target.files && e.target.files.length > 0) {
             const uploadedFilename = await handleAndUploadFile(e.target.files[0]);
-            // if (uploadedFilename) { // Optionally auto-select after button upload too
-            //    await loadAndDisplayPdf(uploadedFilename);
-            // }
         }
         e.target.value = null; 
     });
 
-    // Drag and Drop functionality for the file list area
     const dropZoneActiveClass = ['bg-blue-50', 'border-2', 'border-blue-400', 'border-dashed'];
 
     fileList.addEventListener('dragenter', (e) => {
@@ -188,11 +254,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const files = e.dataTransfer.files;
         if (files && files.length > 0) {
             const uploadedFilename = await handleAndUploadFile(files[0]);
-            // Optionally auto-select: if (uploadedFilename) { await loadAndDisplayPdf(uploadedFilename); }
         }
     });
 
-    // Drag and Drop functionality for the middle panel (pdf-preview area)
     pdfPreview.addEventListener('dragenter', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -220,19 +284,17 @@ document.addEventListener('DOMContentLoaded', function() {
         if (files && files.length > 0) {
             const uploadedFilename = await handleAndUploadFile(files[0]);
             if (uploadedFilename) {
-                await loadAndDisplayPdf(uploadedFilename); // Auto-select and display the dropped file
+                await loadAndDisplayPdf(uploadedFilename);
             }
         }
     });
 
-    // Load file list from backend
     async function loadFileList() {
         const fileListElement = document.getElementById('file-list');
         if (!fileListElement) {
             console.error('loadFileList Error: DOM element #file-list not found.');
             return;
         }
-
         console.log('loadFileList: Attempting to fetch /files...');
         try {
             const response = await fetch('/files');
@@ -242,358 +304,449 @@ document.addEventListener('DOMContentLoaded', function() {
                 fileListElement.innerHTML = '<li class="px-2 py-1 text-red-600">Error loading files. Check console.</li>';
                 return;
             }
-
             const files = await response.json();
             console.log('loadFileList: Received files from backend:', files);
-
-            fileListElement.innerHTML = ''; // Clear existing list
-
-            if (Array.isArray(files) && files.length > 0) {
-                files.forEach(filename => {
-                    const li = document.createElement('li');
-                    li.className = 'file-item cursor-pointer px-3 py-1.5 rounded hover:bg-blue-100 mb-2 flex items-center gap-2'; // Added flex, items-center, gap-2
-
-                    // PDF Icon SVG
-                    const iconSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                    iconSvg.setAttribute('class', 'w-4 h-4 flex-shrink-0');
-                    iconSvg.setAttribute('viewBox', '0 0 20 20');
-                    iconSvg.innerHTML = '<g><path d="M4 0C2.89543 0 2 0.89543 2 2V18C2 19.1046 2.89543 20 4 20H16C17.1046 20 18 19.1046 18 18V6L12 0H4Z" fill="#FFFFFF" stroke="#4B5563" stroke-width="1"/><path d="M12 0L18 6H12V0Z" fill="#E5E7EB" stroke="#4B5563" stroke-width="0.5"/><text x="5" y="15" font-family="Arial, sans-serif" font-size="6px" font-weight="bold" fill="#B91C1C">PDF</text></g>';
-                    
-                    li.appendChild(iconSvg);
-
-                    const fileNameSpan = document.createElement('span');
-                    fileNameSpan.textContent = filename;
-                    fileNameSpan.className = 'break-words text-sm text-gray-700 truncate'; // Truncation styles on the span
-                    // Styles for single-line truncation with ellipsis (already applied by truncate)
-                    fileNameSpan.style.display = 'block'; // Ensure it takes block for truncation
-                    fileNameSpan.style.overflow = 'hidden';
-                    fileNameSpan.style.textOverflow = 'ellipsis';
-                    fileNameSpan.style.whiteSpace = 'nowrap';
-                    // fileNameSpan.style.lineHeight = '1.3em'; // From previous, ensure it aligns well
-                    
-                    li.appendChild(fileNameSpan);
-                    li.title = filename; // Show full name on hover of the whole item
-
-                    li.addEventListener('click', () => {
-                        console.log('File item clicked:', filename);
-                        loadAndDisplayPdf(filename);
-                    });
-                    fileListElement.appendChild(li);
-                });
-                console.log(`loadFileList: Added ${files.length} files to the list.`);
-            } else if (Array.isArray(files) && files.length === 0) {
-                console.log('loadFileList: No files returned from backend.');
-                fileListElement.innerHTML = '<li class="px-2 py-1 text-gray-500">No files uploaded yet.</li>';
+            fileListElement.innerHTML = '';
+            if (files.length === 0) {
+                fileListElement.innerHTML = '<li class="px-2 py-1 text-gray-500">No files uploaded.</li>';
             } else {
-                console.error('loadFileList: Backend did not return a valid array of files.', files);
-                fileListElement.innerHTML = '<li class="px-2 py-1 text-red-600">Invalid file data from server.</li>';
+                files.forEach(file => {
+                    const listItem = document.createElement('li');
+                    listItem.textContent = file;
+                    listItem.className = 'px-3 py-2 cursor-pointer hover:bg-gray-100 rounded text-sm text-gray-700 truncate';
+                    listItem.addEventListener('click', async () => {
+                        if (currentFile === file && pdfDoc) {
+                            console.log(`File ${file} is already loaded.`);
+                            return;
+                        }
+                        await loadAndDisplayPdf(file);
+                    });
+                    fileListElement.appendChild(listItem);
+                });
             }
         } catch (error) {
-            console.error('loadFileList: Unexpected error:', error);
-            fileListElement.innerHTML = '<li class="px-2 py-1 text-red-600">Failed to load files. Check console.</li>';
+            console.error('loadFileList: Error fetching or processing file list:', error);
+            fileListElement.innerHTML = '<li class="px-2 py-1 text-red-600">Failed to load files. See console.</li>';
         }
     }
 
-    // Edit/Save button functionality
-    editBtn.addEventListener('click', async () => {
-        if (isEditingMarkdown) {
-            if (!currentFile || !currentPage) {
-                alert("No file or page selected to save.");
-                return;
-            }
-            const updatedMarkdown = markdownView.value;
-            try {
-                const response = await fetch(`/save-markdown/${encodeURIComponent(currentFile)}/${currentPage}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ markdown: updatedMarkdown })
-                });
-                if (!response.ok) {
-                    const errorResult = await response.json().catch(() => ({ detail: "Unknown error saving markdown" }));
-                    throw new Error(errorResult.detail || response.statusText);
-                }
-                const result = await response.json();
-                markdownView.setAttribute('readonly', true);
-                editBtn.innerHTML = pencilIconSVG;
-                editBtn.title = "Edit text";
-                editBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
-                editBtn.classList.add('bg-green-500', 'hover:bg-green-600');
-                refreshBtn.style.display = 'inline-flex';
-                exportBtnToggle.style.display = 'inline-flex';
-                isEditingMarkdown = false;
-            } catch (error) {
-                console.error("Error saving markdown:", error);
-                alert(`Error saving: ${error.message}`);
-            }
-        } else {
-            markdownView.removeAttribute('readonly');
-            editBtn.innerHTML = saveIconSVG;
-            editBtn.title = "Save changes";
-            editBtn.classList.remove('bg-green-500', 'hover:bg-green-600');
-            editBtn.classList.add('bg-red-500', 'hover:bg-red-600');
-            refreshBtn.style.display = 'none';
-            exportBtnToggle.style.display = 'none';
-            exportDropdown.classList.add('hidden');
-            isEditingMarkdown = true;
-            markdownView.focus();
-        }
-    });
-
-    // Refresh button functionality
-    refreshBtn.addEventListener('click', async () => {
-        if (!currentFile || !currentPage) {
-            alert("No file or page selected to refresh.");
-            return;
-        }
-        if (isEditingMarkdown) {
-            alert("Please save or cancel editing before refreshing.");
-            return;
-        }
-
-        console.log(`Refreshing page ${currentPage} for file ${currentFile}`);
-        showSpinner(`Refreshing page ${currentPage}...`);
-        try {
-            const response = await fetch(`/force-extract-page/${encodeURIComponent(currentFile)}/${currentPage}`, {
-                method: 'POST'
-            });
-            if (!response.ok) {
-                const errData = await response.json().catch(() => ({ detail: "Failed to trigger page re-extraction." }));
-                throw new Error(errData.detail);
-            }
-            // Re-fetch and display the markdown for the current page
-            await fetchExtractedMarkdown(currentFile, currentPage);
-        } catch (error) {
-            console.error("Error refreshing page:", error);
-            alert(`Error refreshing page: ${error.message}`);
-        } finally {
-            hideSpinner();
-        }
-    });
-
-    // Main function to load PDF, trigger initial extraction, and render first page
     async function loadAndDisplayPdf(filename) {
-        console.log('loadAndDisplayPdf for:', filename);
+        showSpinner(`Loading ${filename}...`);
         currentFile = filename;
         currentPage = 1;
-        highestPageExtractedLocally = 0;
-        isPdfFullyExtracted = false;
         pdfDoc = null;
-        updateMarkdownControlsState(true); // Disable controls while initially loading/switching
-        dropZoneHint.classList.remove('hidden'); // Show hint initially or when file changes
-        pdfCanvas.classList.add('hidden'); // Hide canvas initially
-
-        if (isEditingMarkdown) {
-            markdownView.setAttribute('readonly', true);
-            editBtn.innerHTML = pencilIconSVG;
-            editBtn.title = "Edit text";
-            editBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
-            editBtn.classList.add('bg-green-500', 'hover:bg-green-600');
-            refreshBtn.style.display = 'inline-flex';
-            exportBtnToggle.style.display = 'inline-flex';
-            isEditingMarkdown = false;
-        }
-        markdownView.value = 'Preparing PDF...';
-        pageInfo.textContent = 'Page ? / ?';
-
-        showSpinner(`Fetching info for ${filename}...`);
+        isPdfFullyExtracted = false;
+        highestPageExtractedLocally = 0;
+        
+        isEditingContent = false;
+        editBtn.innerHTML = pencilIconSVG;
+        
+        initEditor('', true);
 
         try {
-            const extractInfo = await triggerExtraction(filename, 1);
-            currentFileTotalPages = extractInfo.totalPages;
-            highestPageExtractedLocally = extractInfo.lastPageExtractedInBatch;
-            isPdfFullyExtracted = extractInfo.isProcessingComplete;
-            pageInfo.textContent = `Page ${currentPage} / ${currentFileTotalPages}`;
-
-            const url = `/file/${encodeURIComponent(filename)}`;
-            const pdfjsViewer = window.pdfjsLib || globalThis.pdfjsLib;
-            if (!pdfjsViewer || typeof pdfjsViewer.getDocument !== 'function') {
-                throw new Error('PDF.js library not loaded.');
-            }
-            const loadingTask = pdfjsViewer.getDocument(url);
-            pdfDoc = await loadingTask.promise;
-            console.log('PDF document loaded for rendering.');
-            updateMarkdownControlsState(false); // Enable controls now that PDF is loaded
-            // dropZoneHint.classList.add('hidden'); // Hide hint after PDF is loaded, before rendering first page
-            // pdfCanvas.classList.remove('hidden'); // Show canvas now
-            await renderPdfPage(currentPage); // This will hide hint and show canvas
+            const response = await fetch(`/file/${filename}`);
+            if (!response.ok) throw new Error(`Failed to load PDF: ${response.statusText}`);
+            const pdfData = await response.arrayBuffer();
+            pdfDoc = await pdfjsLib.getDocument({ data: pdfData }).promise;
+            currentFileTotalPages = pdfDoc.numPages;
+            pageInfo.textContent = `Page ${currentPage} of ${currentFileTotalPages}`;
+            gotoPageInput.max = currentFileTotalPages;
+            gotoPageInput.value = currentPage;
+            dropZoneHint.style.display = 'none'; 
+            await renderPdfPage(currentPage);
+            await loadContentForPage(currentPage);
+            await triggerExtraction(filename, currentPage); 
+            updateEditorControlsState(false);
         } catch (error) {
-            console.error(`Error in loadAndDisplayPdf for "${filename}":`, error);
-            alert(`Failed to load PDF: ${error.message}. Check console.`);
-            markdownView.value = `Error loading PDF: ${error.message}`;
-            pageInfo.textContent = 'Error';
+            console.error("Error loading PDF:", error);
+            alert(`Error loading PDF: ${error.message}`);
             currentFile = null;
-            updateMarkdownControlsState(true);
-            dropZoneHint.classList.remove('hidden'); // Show hint on error
-            pdfCanvas.classList.add('hidden'); // Hide canvas on error
+            dropZoneHint.style.display = 'block';
+            updateEditorControlsState(true);
+            if (tinymceEditor) tinymceEditor.setContent('');
         } finally {
             hideSpinner();
-            // Ensure export button visibility is correct based on edit mode, even after load
-            if (!isEditingMarkdown && currentFile) { // only if a file is active
-                exportBtnToggle.style.display = 'inline-flex';
-            } else if (!currentFile) { // no file active
-                 exportBtnToggle.style.display = 'none';
-            }
-            // Edit and Refresh buttons visibility is handled by their disabled state now
         }
     }
-
-    // Triggers backend extraction for a given page hint
+    
     async function triggerExtraction(filename, pageNumHint) {
+        if (!filename) return;
         console.log(`Triggering extraction for ${filename}, page hint: ${pageNumHint}`);
-        showSpinner(`Processing PDF (page ${pageNumHint} batch)...`); 
+        showSpinner(`Extracting text from ${filename}...`);
         try {
-            const response = await fetch(`/extract/${encodeURIComponent(filename)}?page_hint=${pageNumHint}`, {
-                method: 'POST'
-            });
+            const response = await fetch(`/extract/${filename}?page_hint=${pageNumHint}`, { method: 'POST' });
             if (!response.ok) {
-                const errData = await response.json().catch(() => ({ detail: "Extraction request failed"}));
-                console.error("triggerExtraction: Fetch not ok:", errData.detail);
-                throw new Error(errData.detail);
+                const errorData = await response.json().catch(() => ({ detail: "Extraction error."}));
+                throw new Error(errorData.detail || "Extraction failed");
             }
             const data = await response.json();
-            console.log('triggerExtraction: Extraction response received from backend:', data);
-            highestPageExtractedLocally = Math.max(highestPageExtractedLocally, data.lastPageExtractedInBatch);
-            isPdfFullyExtracted = data.isProcessingComplete;
-            currentFileTotalPages = data.totalPages;
-            return data;
+            console.log("Extraction response:", data);
+            highestPageExtractedLocally = data.lastPageExtractedInBatch || highestPageExtractedLocally;
+            isPdfFullyExtracted = data.isProcessingComplete || (highestPageExtractedLocally >= currentFileTotalPages);
+
+            if (data.contentType && data.contentType === 'html') {
+                console.log('Extraction provided HTML content type.');
+            }
+            if (currentPage === pageNumHint && tinymceEditor && tinymceEditor.getContent() === '') {
+                 await loadContentForPage(currentPage);
+            }
         } catch (error) {
-            console.error("Error in triggerExtraction function:", error);
-            // Spinner will be hidden by the finally block
-            throw error; // Re-throw so it can be caught by callers if necessary
+            console.error("Extraction error:", error);
         } finally {
-            console.log("triggerExtraction: Entering finally block."); 
-            hideSpinner(); 
-            console.log("triggerExtraction: hideSpinner() called from finally block."); 
+            hideSpinner();
         }
     }
 
-    // Renders the PDF page and then fetches its markdown
     async function renderPdfPage(pageNum) {
-        if (!pdfDoc) {
-            console.warn("renderPdfPage: pdfDoc not available.");
-            markdownView.value = "PDF document not loaded.";
-            hideSpinner();
-            dropZoneHint.classList.remove('hidden'); // Ensure hint is visible if no PDF doc
-            pdfCanvas.classList.add('hidden');
-            return;
-        }
-        if (isEditingMarkdown) {
-            console.log("Navigating page while editing. Consider save prompt.");
-        }
-
+        if (!pdfDoc) return;
+        showSpinner(`Rendering page ${pageNum}...`);
         try {
             const page = await pdfDoc.getPage(pageNum);
             const viewport = page.getViewport({ scale: 1.5 });
             const context = pdfCanvas.getContext('2d');
             pdfCanvas.height = viewport.height;
             pdfCanvas.width = viewport.width;
-            dropZoneHint.classList.add('hidden'); // Hide hint before rendering page
-            pdfCanvas.classList.remove('hidden'); // Show canvas
-            await page.render({ canvasContext: context, viewport: viewport }).promise;
-            pageInfo.textContent = `Page ${pageNum} / ${currentFileTotalPages}`;
-            console.log(`PDF Page ${pageNum} rendered.`);
-            await fetchExtractedMarkdown(currentFile, pageNum);
+            const renderContext = { canvasContext: context, viewport: viewport };
+            await page.render(renderContext).promise;
+            pageInfo.textContent = `Page ${pageNum} of ${currentFileTotalPages}`;
+            currentPage = pageNum;
+            gotoPageInput.value = currentPage;
         } catch (error) {
-            console.error(`Error rendering PDF page ${pageNum}:`, error);
-            markdownView.value = `Error rendering PDF page ${pageNum}.`;
-            dropZoneHint.classList.remove('hidden'); // Show hint on rendering error
-            pdfCanvas.classList.add('hidden');
+            console.error("Error rendering page:", error);
+        } finally {
+            hideSpinner();
         }
     }
 
-    // Fetches (and triggers extraction if needed) and displays markdown
-    async function fetchExtractedMarkdown(filename, pageNum) {
-        if (!filename) return;
-        console.log(`Fetching markdown for ${filename}, page ${pageNum}. Highest extracted: ${highestPageExtractedLocally}, Fully extracted: ${isPdfFullyExtracted}`);
+    async function loadContentForPage(pageNum) {
+        if (!currentFile) return;
         
-        markdownView.value = `Loading text for page ${pageNum}...`;
-        let data;
+        const loadingMessage = 'Loading content...';
+        if (tinymceEditor) {
+            tinymceEditor.setContent(loadingMessage);
+        } else {
+            initEditor(loadingMessage, true); 
+        }
+
+        console.log(`Fetching content for ${currentFile}, page ${pageNum}`);
         try {
-            const response = await fetch(`/extracted-markdown/${encodeURIComponent(filename)}/${pageNum}`);
+            const response = await fetch(`/extracted-content/${currentFile}/${pageNum}`);
             if (!response.ok) {
-                // Handle non-OK responses that are not necessarily JSON
-                const errorText = await response.text().catch(() => `Server error ${response.status}`);
-                throw new Error(errorText);
+                const errorText = await response.text();
+                throw new Error(`Failed to fetch content: ${response.status} ${errorText}`);
             }
-            data = await response.json();
+            const data = await response.json();
+            console.log("Received content data:", data);
+            const htmlContent = data.html_content || '';
+
+            if (tinymceEditor) {
+                tinymceEditor.setContent(htmlContent);
+            } else {
+                console.warn("loadContentForPage: tinymceEditor was not found, re-initializing (should be rare).");
+                initEditor(htmlContent, !isEditingContent);
+            }
+
+            if (data.status === 'found' || data.status === 'not_found') {
+                const htmlContent = data.html_content || '';
+                if (tinymceEditor) {
+                    tinymceEditor.setContent(htmlContent);
+                    tinymceEditor.mode.set(isEditingContent ? 'design' : 'readonly');
+                } else {
+                    console.warn("loadContentForPage: tinymceEditor not found, initializing now.");
+                    initEditor(htmlContent, !isEditingContent);
+                }
+            } else if (data.status === 'extraction_pending' || !data.html_content) {
+                if (tinymceEditor) tinymceEditor.setContent('<p>Text extraction is pending or not yet available for this page. Please wait or try refreshing.</p>');
+                else contentArea.value = 'Text extraction is pending...';
+                if (!isPdfFullyExtracted && pageNum > highestPageExtractedLocally) {
+                    console.log("Content not found, attempting to trigger extraction for this page specifically.");
+                    await triggerExtraction(currentFile, pageNum);
+                }
+            } else {
+                 if (tinymceEditor) tinymceEditor.setContent('<p>Error loading content.</p>'); else contentArea.value = 'Error loading content.';
+            }
         } catch (error) {
-            console.error(`Initial error fetching markdown for page ${pageNum}:`, error);
-            markdownView.value = `Error loading extracted text: ${error.message}`;
-            // Optional: could try to triggerExtraction here if it was a network error not a 404-like error from backend
+            console.error("Error fetching content:", error);
+            if (tinymceEditor) tinymceEditor.setContent(`<p>Error loading content: ${error.message}</p>`); else contentArea.value = `Error: ${error.message}`;
+        }
+    }
+
+    prevPageBtn.addEventListener('click', async () => {
+        if (currentPage > 1) {
+            currentPage--;
+            await renderPdfPage(currentPage);
+            await loadContentForPage(currentPage);
+             if (!isPdfFullyExtracted && currentPage > highestPageExtractedLocally) {
+                await triggerExtraction(currentFile, currentPage);
+            }
+        }
+    });
+
+    nextPageBtn.addEventListener('click', async () => {
+        if (pdfDoc && currentPage < currentFileTotalPages) {
+            currentPage++;
+            await renderPdfPage(currentPage);
+            await loadContentForPage(currentPage);
+            if (!isPdfFullyExtracted && currentPage > highestPageExtractedLocally) {
+                await triggerExtraction(currentFile, currentPage);
+            }
+        }
+    });
+    
+    gotoBtn.addEventListener('click', async () => {
+        const pageNum = parseInt(gotoPageInput.value);
+        if (pdfDoc && pageNum >= 1 && pageNum <= currentFileTotalPages) {
+            currentPage = pageNum;
+            await renderPdfPage(currentPage);
+            await loadContentForPage(currentPage);
+            if (!isPdfFullyExtracted && currentPage > highestPageExtractedLocally) {
+                await triggerExtraction(currentFile, currentPage);
+            }
+        } else {
+            alert(`Please enter a page number between 1 and ${currentFileTotalPages}.`);
+        }
+    });
+
+    editBtn.addEventListener('click', async () => {
+        if (!currentFile) {
+            console.warn("Edit button clicked, but no file loaded.");
+            return;
+        }
+        
+        if (!tinymceEditor && !isEditingContent) {
+            // This case might happen if PDF loaded but editor init failed silently, or before any content loaded
+            // Try to initialize in edit mode if user clicks edit.
+            console.warn("Edit clicked, no editor instance, but not in logical edit state. Attempting to init for editing.");
+            setEditorMode(true); // This will call initEditor with content='' and readonly=false
+            return;
+        } else if (!tinymceEditor && isEditingContent){
+            // This would be an inconsistent state: logically editing, but no editor. Log and try to recover.
+            console.error("Edit clicked: Logically in edit mode, but no editor instance! Attempting to re-init for editing.");
+            setEditorMode(true); // Re-init for editing
             return;
         }
 
-        // Now, handle the response, especially if the file was "not_found"
-        if (data.status === 'not_found') {
-            console.warn(`Markdown for page ${pageNum} not found by backend. Attempting to trigger extraction.`);
-            try {
-                await triggerExtraction(filename, pageNum); // This will show spinner for its duration
-                
-                console.log(`Re-fetching markdown for page ${pageNum} after triggering extraction.`);
-                const retryResponse = await fetch(`/extracted-markdown/${encodeURIComponent(filename)}/${pageNum}`);
-                if (!retryResponse.ok) {
-                    const retryErrorText = await retryResponse.text().catch(() => `Server error ${retryResponse.status}`);
-                    throw new Error(retryErrorText);
-                }
-                const retryData = await retryResponse.json();
-                
-                if (retryData.status === 'not_found') {
-                    markdownView.value = 'No text found on this page (extraction attempted). Might be a blank page.';
-                    console.warn(`Markdown for page ${pageNum} still not found after re-extraction attempt.`);
-                } else {
-                    markdownView.value = retryData.markdown || 'No text extracted for this page (empty after re-extraction).';
-                }
-            } catch (error) {
-                console.error(`Error during or after re-extraction attempt for page ${pageNum}:`, error);
-                markdownView.value = `Error processing page ${pageNum}: ${error.message}`;
-            }
-        } else { // data.status === 'found'
-            markdownView.value = data.markdown || 'No text extracted for this page (empty).';
+        // If we are currently in an editing state (logically, according to isEditingContent)
+        if (isEditingContent) { 
+            // Then the action is to SAVE (and switch to readonly)
+            await saveHtmlContent(); // This will call setEditorMode(false) on success
+        } else { 
+            // We are currently in readonly state (logically), so the action is to EDIT
+            setEditorMode(true); // This will re-init for editing and set isEditingContent = true
         }
-        console.log(`Markdown for page ${pageNum} processing finished.`);
-        // Spinner management: 
-        // - triggerExtraction handles its own spinner.
-        // - The main spinner from loadAndDisplayPdf is handled by its finally block.
-        // - No separate spinner for just fetching already extracted markdown is used here to avoid flashing.
+    });
+
+    async function saveHtmlContent() {
+        if (!currentFile || !tinymceEditor) {
+            console.error("saveHtmlContent: No current file or editor.");
+            return;
+        }
+        showSpinner('Saving content...');
+        const htmlContent = tinymceEditor.getContent();
+        try {
+            const response = await fetch(`/save-html/${currentFile}/${currentPage}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: htmlContent })
+            });
+            if (!response.ok) {
+                let errorDetail = `Failed to save content (status ${response.status})`; // Default
+                try {
+                    const errorData = await response.json();
+                    // Try to get a meaningful message from common error structures
+                    if (typeof errorData.detail === 'string') {
+                        errorDetail = errorData.detail;
+                    } else if (typeof errorData.message === 'string') {
+                        errorDetail = errorData.message;
+                    } else if (typeof errorData.error === 'string') {
+                        errorDetail = errorData.error;
+                    } else {
+                        errorDetail = JSON.stringify(errorData); // Fallback to stringifying the whole object
+                    }
+                } catch (jsonError) {
+                    // If parsing JSON fails, try to get raw text
+                    try {
+                        const rawTextError = await response.text();
+                        if (rawTextError && rawTextError.length < 200) { // Avoid huge HTML pages as error messages
+                           errorDetail = rawTextError; 
+                        }
+                    } catch (textError) {
+                        // If all else fails, stick to the default message with status code
+                    }
+                }
+                throw new Error(errorDetail);
+            }
+            console.log('Content saved successfully.');
+            setEditorMode(false); // Switch to readonly mode (minimal UI) after successful save
+        } catch (err) {
+            console.error("Save error:", err);
+            alert(`Save failed: ${err.message}`);
+        } finally {
+            hideSpinner();
+        }
     }
 
-    // Event listeners for page navigation
-    prevPageBtn.addEventListener('click', () => {
-        if (currentPage > 1) {
-            currentPage--;
-            renderPdfPage(currentPage);
-        }
-    });
-    nextPageBtn.addEventListener('click', () => {
-        if (currentPage < currentFileTotalPages) { // Use dynamic total pages
-            currentPage++;
-            renderPdfPage(currentPage);
-        }
-    });
-    gotoBtn.addEventListener('click', () => {
-        const page = parseInt(gotoPageInput.value);
-        if (page >= 1 && page <= currentFileTotalPages) {
-            currentPage = page;
-            renderPdfPage(currentPage);
+    refreshBtn.addEventListener('click', async () => {
+        if (!currentFile) return;
+        showSpinner(`Re-extracting page ${currentPage}...`);
+        try {
+            const response = await fetch(`/force-extract-page/${currentFile}/${currentPage}`, { method: 'POST' });
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ detail: "Force extract failed" }));
+                throw new Error(errorData.detail || "Failed to re-extract page content.");
+            }
+            const data = await response.json();
+            console.log("Force extract response:", data);
+            if (data.status === 'success') {
+                await loadContentForPage(currentPage);
+                console.log(`Page ${currentPage} content refreshed.`);
+            } else {
+                throw new Error(data.message || "Unknown error during refresh.");
+            }
+        } catch (err) {
+            console.error("Refresh error:", err);
+            alert(`Refresh failed: ${err.message}`);
+        } finally {
+            hideSpinner();
         }
     });
 
-    // Export functionality
-    exportBtnToggle.addEventListener('click', (event) => {
-        event.stopPropagation(); // Prevent click from immediately closing dropdown via window listener
+    exportBtnToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
         exportDropdown.classList.toggle('hidden');
     });
 
-    // Close dropdown if clicked outside
-    window.addEventListener('click', (event) => {
-        if (!exportBtnToggle.contains(event.target) && !exportDropdown.contains(event.target)) {
+    document.body.addEventListener('click', (e) => {
+        if (!exportBtnToggle.contains(e.target) && !exportDropdown.contains(e.target)) {
             exportDropdown.classList.add('hidden');
         }
     });
+    
+    function stripHtml(html) {
+        const tmp = document.createElement("DIV");
+        tmp.innerHTML = html;
+        return tmp.textContent || tmp.innerText || "";
+    }
 
-    // Helper function to trigger file download
+    exportCurrentTxtBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        if (!currentFile || !tinymceEditor) return;
+        const htmlContent = tinymceEditor.getContent();
+        const textContent = stripHtml(htmlContent);
+        const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+        triggerDownload(blob, `${currentFile}_page${currentPage}.txt`);
+        exportDropdown.classList.add('hidden');
+    });
+
+    exportCurrentDocxBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        if (!currentFile || !tinymceEditor) return;
+        const htmlContent = tinymceEditor.getContent();
+        const textContent = stripHtml(htmlContent);
+        
+        // Explicitly use window.docx to ensure global scope is checked
+        if (typeof window.docx === 'undefined') {
+            console.error("DOCX library (window.docx) is not defined. Make sure it is loaded correctly.");
+            alert("Error: DOCX export library not loaded.");
+            return;
+        }
+
+        const doc = new window.docx.Document({
+            sections: [{
+                properties: {},
+                children: [new window.docx.Paragraph({ children: [new window.docx.TextRun(textContent)] })],
+            }]
+        });
+
+        const blob = await window.docx.Packer.toBlob(doc);
+        triggerDownload(blob, `${currentFile}_page${currentPage}.docx`);
+        exportDropdown.classList.add('hidden');
+    });
+
+    async function getAllPagesHtmlContent() {
+        if (!pdfDoc) return '';
+        let allHtml = '';
+        showSpinner(`Fetching all ${currentFileTotalPages} pages for export...`);
+        for (let i = 1; i <= currentFileTotalPages; i++) {
+            try {
+                console.log(`Export All: Fetching page ${i} of ${currentFileTotalPages}`);
+                 const response = await fetch(`/extracted-content/${currentFile}/${i}`);
+                 if (response.ok) {
+                    const data = await response.json();
+                    if (data.html_content) {
+                         allHtml += data.html_content + '\\n\\n--- Page Break ---\\n\\n';
+                    } else {
+                        console.log(`Content for page ${i} not readily available, trying to force extract for export.`);
+                        const forceExtractResp = await fetch(`/force-extract-page/${currentFile}/${i}`, { method: 'POST' });
+                        if (forceExtractResp.ok) {
+                            const forceData = await forceExtractResp.json();
+                            if(forceData.status === 'success'){
+                                const refreshedContentResp = await fetch(`/extracted-content/${currentFile}/${i}`);
+                                if(refreshedContentResp.ok){
+                                    const refreshedData = await refreshedContentResp.json();
+                                    if(refreshedData.html_content){
+                                        allHtml += refreshedData.html_content + '\\n\\n--- Page Break ---\\n\\n';
+                                    } else {
+                                        allHtml += `<!-- Page ${i}: Content could not be extracted -->\\n\\n--- Page Break ---\\n\\n`;
+                                    }
+                                }
+                            } else {
+                                 allHtml += `<!-- Page ${i}: Content could not be extracted (force failed) -->\\n\\n--- Page Break ---\\n\\n`;
+                            }
+                        } else {
+                             allHtml += `<!-- Page ${i}: Content could not be extracted (force endpoint failed) -->\\n\\n--- Page Break ---\\n\\n`;
+                        }
+                    }
+                 } else {
+                    allHtml += `<!-- Page ${i}: Error fetching content -->\\n\\n--- Page Break ---\\n\\n`;
+                 }
+            } catch (err) {
+                console.error(`Error fetching page ${i} for export:`, err);
+                allHtml += `<!-- Page ${i}: Exception during fetch: ${err.message} -->\\n\\n--- Page Break ---\\n\\n`;
+            }
+        }
+        hideSpinner();
+        return allHtml;
+    }
+    
+    exportAllTxtBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        if (!currentFile || !pdfDoc) return;
+        const allHtmlContent = await getAllPagesHtmlContent();
+        const allTextContent = stripHtml(allHtmlContent.replace(/\\n\\n--- Page Break ---\\n\\n/g, '\\n\\n'));
+        const blob = new Blob([allTextContent], { type: 'text/plain;charset=utf-8' });
+        triggerDownload(blob, `${currentFile}_all_pages.txt`);
+        exportDropdown.classList.add('hidden');
+    });
+
+    exportAllDocxBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        if (!currentFile || !pdfDoc) return;
+        const allHtmlContent = await getAllPagesHtmlContent();
+        const allTextContentForDocx = stripHtml(allHtmlContent.replace(/\\n\\n--- Page Break ---\\n\\n/g, '\\n\\n')); 
+
+        // Explicitly use window.docx
+        if (typeof window.docx === 'undefined') {
+            console.error("DOCX library (window.docx) is not defined for all pages export. Make sure it is loaded correctly.");
+            alert("Error: DOCX export library not loaded.");
+            return;
+        }
+
+        const paragraphs = allTextContentForDocx.split('\\n').map(textLine => 
+            new window.docx.Paragraph({ children: [new window.docx.TextRun(textLine)] })
+        );
+
+        const doc = new window.docx.Document({
+            sections: [{
+                properties: {},
+                children: paragraphs.length > 0 ? paragraphs : [new window.docx.Paragraph({ children: [new window.docx.TextRun('')] })] // Ensure at least one paragraph for empty docs
+            }]
+        });
+        const blob = await window.docx.Packer.toBlob(doc);
+        triggerDownload(blob, `${currentFile}_all_pages.docx`);
+        exportDropdown.classList.add('hidden');
+    });
+
     function triggerDownload(blob, filename) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -603,159 +756,85 @@ document.addEventListener('DOMContentLoaded', function() {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        exportDropdown.classList.add('hidden'); // Hide dropdown after action
     }
-
-    // Export Current Page as Text
-    exportCurrentTxtBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        if (!currentFile || !markdownView.value.trim()) {
-            alert("No content to export or no file active.");
-            exportDropdown.classList.add('hidden');
-            return;
-        }
-        const textContent = markdownView.value;
-        const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
-        const filename = `${currentFile.split('.').slice(0, -1).join('.')}_page${currentPage}.txt`;
-        triggerDownload(blob, filename);
-    });
-
-    // Export Current Page as Word (.docx)
-    exportCurrentDocxBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        if (!currentFile || !markdownView.value.trim()) {
-            alert("No content to export or no file active.");
-            exportDropdown.classList.add('hidden');
-            return;
-        }
-        const textContent = markdownView.value;
-        const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx;
-        const paragraphs = textContent.split('\n').map(line => new Paragraph({ children: [new TextRun(line)] }));
-        const doc = new Document({
-            sections: [{
-                properties: {},
-                children: paragraphs.length > 0 ? paragraphs : [new Paragraph({ children: [new TextRun("")] })],
-            }]
-        });
-        try {
-            const blob = await Packer.toBlob(doc);
-            const filename = `${currentFile.split('.').slice(0, -1).join('.')}_page${currentPage}.docx`;
-            triggerDownload(blob, filename);
-        } catch (error) {
-            console.error("Error generating .docx file for current page:", error);
-            alert("Failed to generate .docx file. See console for details.");
-            exportDropdown.classList.add('hidden');
-        }
-    });
-
-    // Helper function to fetch/extract all pages content
-    async function getAllPagesTextContent() {
-        if (!currentFile || currentFileTotalPages === 0) {
-            throw new Error("No file selected or file has no pages.");
-        }
-        showSpinner(`Preparing to process all ${currentFileTotalPages} pages...`);
-        let allPagesText = []; // Array to hold each page's text
-        let extractionErrors = [];
-
-        for (let pageNum = 1; pageNum <= currentFileTotalPages; pageNum++) {
-            showSpinner(`Processing page ${pageNum} of ${currentFileTotalPages}...`);
-            let pageContent = "";
-            try {
-                let mdResponse = await fetch(`/extracted-markdown/${encodeURIComponent(currentFile)}/${pageNum}`);
-                let mdData = await mdResponse.json();
-
-                if (mdData.status === 'not_found') {
-                    showSpinner(`Extracting page ${pageNum} of ${currentFileTotalPages}...`);
-                    const forceExtractResponse = await fetch(`/force-extract-page/${encodeURIComponent(currentFile)}/${pageNum}`, { method: 'POST' });
-                    if (!forceExtractResponse.ok) {
-                        const errData = await forceExtractResponse.json().catch(() => ({ detail: `Failed to extract page ${pageNum}` }));
-                        throw new Error(errData.detail);
-                    }
-                    mdResponse = await fetch(`/extracted-markdown/${encodeURIComponent(currentFile)}/${pageNum}`);
-                    mdData = await mdResponse.json();
-                    if (mdData.status === 'found') {
-                        pageContent = mdData.markdown || "";
-                    } else {
-                        throw new Error(`Content not found for page ${pageNum} after extraction attempt`);
-                    }
-                } else if (mdData.status === 'found') {
-                    pageContent = mdData.markdown || "";
-                } else {
-                    throw new Error(`Unknown status for page ${pageNum}: ${mdData.status}`);
-                }
-            } catch (err) {
-                console.warn(`Could not fully process page ${pageNum} for ${currentFile}: ${err.message}`);
-                extractionErrors.push(`Page ${pageNum}: ${err.message}`);
-                pageContent = `[Error processing page ${pageNum}: ${err.message}]`;
-            }
-            allPagesText.push({ pageNum, content: pageContent });
-        }
-        return { allPagesText, extractionErrors };
-    }
-
-    // Export All Pages as Text
-    exportAllTxtBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        if (isEditingMarkdown) { alert("Save or cancel edits first."); return; }
-        try {
-            const { allPagesText, extractionErrors } = await getAllPagesTextContent();
-            showSpinner("Collating text and preparing download...");
-            let combinedContent = allPagesText.map(p => `## Page ${p.pageNum}\n\n${p.content}`).join("\n\n---\n\n");
-            if (extractionErrors.length > 0) {
-                combinedContent += `\n\n---ERRORS ENCOUNTERED---\n${extractionErrors.join("\n")}`;
-                alert("Some pages had issues. Errors noted in file.");
-            }
-            const blob = new Blob([combinedContent], { type: 'text/plain;charset=utf-8' });
-            const baseFilename = currentFile.split('.').slice(0, -1).join('.');
-            triggerDownload(blob, `${baseFilename}_all_pages.txt`);
-        } catch (error) {
-            console.error("Error during 'Export All Pages as Text':", error);
-            alert(`An error occurred: ${error.message}`);
-        } finally {
-            hideSpinner();
-            exportDropdown.classList.add('hidden');
-        }
-    });
-
-    // Export All Pages as Word (.docx)
-    exportAllDocxBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        if (isEditingMarkdown) { alert("Save or cancel edits first."); return; }
-        const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx;
-        try {
-            const { allPagesText, extractionErrors } = await getAllPagesTextContent();
-            showSpinner("Collating content for Word document...");
-            
-            const docChildren = [];
-            allPagesText.forEach(page => {
-                docChildren.push(new Paragraph({ text: `Page ${page.pageNum}`, heading: HeadingLevel.HEADING_2 }));
-                page.content.split('\n').forEach(line => {
-                    docChildren.push(new Paragraph({ children: [new TextRun(line)] }));
-                });
-                docChildren.push(new Paragraph({ text: "", children: [new TextRun("---")] })); // Separator
-            });
-
-            if (extractionErrors.length > 0) {
-                docChildren.push(new Paragraph({ text: "ERRORS ENCOUNTERED DURING EXPORT", heading: HeadingLevel.HEADING_1 }));
-                extractionErrors.forEach(err => {
-                    docChildren.push(new Paragraph({ children: [new TextRun(err)] }));
-                });
-                alert("Some pages had issues. Errors noted in file.");
-            }
-
-            const doc = new Document({ sections: [{ children: docChildren }] });
-            const blob = await Packer.toBlob(doc);
-            const baseFilename = currentFile.split('.').slice(0, -1).join('.');
-            triggerDownload(blob, `${baseFilename}_all_pages.docx`);
-        } catch (error) {
-            console.error("Error during 'Export All Pages as Word':", error);
-            alert(`An error occurred: ${error.message}`);
-        } finally {
-            hideSpinner();
-            exportDropdown.classList.add('hidden');
-        }
-    });
-
-    // Initial load
+    
     loadFileList();
+    
+    if (!contentArea) console.error("CRITICAL: #content-area (markdownView) not found on DOMContentLoaded");
+    if (!editBtn) console.error("CRITICAL: #edit-btn not found on DOMContentLoaded");
+
+    // New function to dynamically scale editor content
+    function scaleEditorContentToFit(editor) {
+        if (!editor || editor.isHidden() || !editor.getDoc() || !editor.getDoc().body) {
+            // console.log("scaleEditorContentToFit: Editor not ready or hidden.");
+            return;
+        }
+
+        const iframeDoc = editor.getDoc();
+        const contentBody = iframeDoc.body;
+
+        // Reset scale to measure natural dimensions
+        contentBody.style.transform = 'scale(1)';
+        contentBody.style.width = 'auto'; // Allow natural width based on content
+        contentBody.style.height = 'auto'; // Allow natural height
+        // It might be better to get the first child of the body if PyMuPDF wraps page content in a div
+        let contentRoot = contentBody.firstChild;
+        while(contentRoot && contentRoot.nodeType !== 1) { // Find first element node
+            contentRoot = contentRoot.nextSibling;
+        }
+        if (!contentRoot) contentRoot = contentBody; // Fallback to body if no element child
+
+        const contentWidth = contentRoot.scrollWidth;
+        const contentHeight = contentRoot.scrollHeight;
+
+        if (contentWidth === 0 || contentHeight === 0) {
+            // console.log("scaleEditorContentToFit: Content dimensions are zero.");
+            return;
+        }
+
+        const editorContainerElement = editor.getContainer();
+        if (!editorContainerElement) {
+            // console.log("scaleEditorContentToFit: Editor container not found.");
+            return;
+        }
+        
+        // Use clientWidth/Height of the editor element that actually holds the iframe view
+        const toxEditorFrame = editorContainerElement.querySelector('.tox-edit-area iframe');
+        let availableWidth, availableHeight;
+        if(toxEditorFrame && toxEditorFrame.parentElement) { // tox-edit-area is the direct parent usually
+            availableWidth = toxEditorFrame.parentElement.clientWidth;
+            availableHeight = toxEditorFrame.parentElement.clientHeight;
+        } else {
+            availableWidth = editorContainerElement.clientWidth; // Fallback
+            availableHeight = editorContainerElement.clientHeight;
+        }
+
+        const padding = 5; // Small padding within the viewing area
+        const effectiveContainerWidth = Math.max(0, availableWidth - (2 * padding));
+        const effectiveContainerHeight = Math.max(0, availableHeight - (2 * padding));
+
+        if (effectiveContainerWidth <= 0 || effectiveContainerHeight <= 0) {
+            // console.log("scaleEditorContentToFit: Effective container dimensions are zero or negative.");
+            return;
+        }
+
+        let scale = 1.0;
+        const scaleX = effectiveContainerWidth / contentWidth;
+        const scaleY = effectiveContainerHeight / contentHeight;
+        scale = Math.min(scaleX, scaleY); 
+        
+        scale = Math.min(1.0, Math.max(0.05, scale)); // Prevent extreme scales, allow smaller if needed.
+
+        // console.log(`Scaling: Container(${effectiveContainerWidth.toFixed(0)}x${effectiveContainerHeight.toFixed(0)}), Content(${contentWidth}x${contentHeight}), Calculated Scale: ${scale.toFixed(3)}`);
+        
+        // Apply scale to the content body of the iframe
+        contentBody.style.transformOrigin = 'top left';
+        contentBody.style.transform = `scale(${scale})`;
+        
+        // If using a wrapper div approach for content inside body, scale that div instead.
+        // For now, scaling the whole body.
+        // After scaling, the body itself might be smaller than the iframe, which is fine.
+        // We want the *content within the body* to be scaled to fit.
+    }
+
 });

@@ -8,8 +8,10 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- PDF.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- TinyMCE (WYSIWYG Editor) -->
+    <script src="/static/tinymce/tinymce.min.js" referrerpolicy="origin"></script>
     <!-- docx.js for Word export -->
-    <script src="https://unpkg.com/docx@8.2.2/build/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/docx@8.2.2/build/index.umd.js"></script>
     <script>
         // Initialize PDF.js worker
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -52,7 +54,7 @@
         </div>
         <!-- Right Panel -->
         <div id="right-panel" class="flex flex-col flex-1 bg-gray-50 border-l border-gray-200 min-w-[200px] p-4 overflow-hidden">
-            <textarea id="markdown-view" readonly class="flex-1 w-full bg-white border border-gray-200 rounded-md resize-none p-4 text-base text-gray-800 font-mono mb-4"></textarea>
+            <textarea id="content-area" class="flex-1 w-full bg-white border border-gray-200 rounded-md resize-none p-4 text-base font-mono mb-4 text-xs"></textarea>
             <div id="markdown-controls" class="flex items-center justify-start gap-2 p-4 bg-gray-100 border-t border-gray-200 rounded-md">
                 <button id="edit-btn" title="Edit text" class="rounded bg-green-500 text-white hover:bg-green-600 flex items-center justify-center w-8 h-8">
                     <!-- SVG will be injected by JavaScript, default to pencil -->
