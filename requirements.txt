@@ -2,7 +2,9 @@
 fastapi
 uvicorn
 python-multipart
-pdfplumber
-pytesseract
-Pillow
-PyMuPDF 
+unstructured[local-inference]
+python-dotenv
+aiofiles
+beautifulsoup4
+# pdfplumber can be removed if no longer used
+# pypandoc and python-docx can be temporarily commented out or removed if we simplify export for now 

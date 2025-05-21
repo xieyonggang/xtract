@@ -23,6 +23,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const exportCurrentDocxBtn = document.getElementById('export-current-docx-btn');
     const exportAllTxtBtn = document.getElementById('export-all-txt-btn');
     const exportAllDocxBtn = document.getElementById('export-all-docx-btn');
+    const viewJsonBtn = document.getElementById('view-json-btn');
+    const markdownPreview = document.getElementById('markdownPreview');
+    const saveButton = document.getElementById('edit-btn');
+    const refreshButton = document.getElementById('refresh-btn');
 
     const pencilIconSVG = `<svg class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor"><path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" /><path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clip-rule="evenodd" /></svg>`;
     const saveIconSVG = `<svg class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>`;
@@ -33,7 +37,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let isEditingContent = false;
 
     function updateEditorControlsState(disable) {
-        const controls = [editBtn, refreshBtn, exportBtnToggle];
+        const controls = [editBtn, refreshBtn, exportBtnToggle, viewJsonBtn];
         controls.forEach(button => {
             button.disabled = disable;
             if (disable) {
@@ -94,6 +98,7 @@ document.addEventListener('DOMContentLoaded', function() {
             menubar: false,
             toolbar: false,
             statusbar: false,
+            license_key: 'gpl',
             skin_url: '/static/tinymce/skins/ui/oxide',
             skin: 'oxide',
             content_css: '/static/tinymce/skins/content/default/content.min.css',
@@ -355,7 +360,6 @@ document.addEventListener('DOMContentLoaded', function() {
             dropZoneHint.style.display = 'none'; 
             await renderPdfPage(currentPage);
             await loadContentForPage(currentPage);
-            await triggerExtraction(filename, currentPage); 
             updateEditorControlsState(false);
         } catch (error) {
             console.error("Error loading PDF:", error);
@@ -369,34 +373,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    async function triggerExtraction(filename, pageNumHint) {
-        if (!filename) return;
-        console.log(`Triggering extraction for ${filename}, page hint: ${pageNumHint}`);
-        showSpinner(`Extracting text from ${filename}...`);
-        try {
-            const response = await fetch(`/extract/${filename}?page_hint=${pageNumHint}`, { method: 'POST' });
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ detail: "Extraction error."}));
-                throw new Error(errorData.detail || "Extraction failed");
-            }
-            const data = await response.json();
-            console.log("Extraction response:", data);
-            highestPageExtractedLocally = data.lastPageExtractedInBatch || highestPageExtractedLocally;
-            isPdfFullyExtracted = data.isProcessingComplete || (highestPageExtractedLocally >= currentFileTotalPages);
-
-            if (data.contentType && data.contentType === 'html') {
-                console.log('Extraction provided HTML content type.');
-            }
-            if (currentPage === pageNumHint && tinymceEditor && tinymceEditor.getContent() === '') {
-                 await loadContentForPage(currentPage);
-            }
-        } catch (error) {
-            console.error("Extraction error:", error);
-        } finally {
-            hideSpinner();
-        }
-    }
-
     async function renderPdfPage(pageNum) {
         if (!pdfDoc) return;
         showSpinner(`Rendering page ${pageNum}...`);
@@ -430,40 +406,23 @@ document.addEventListener('DOMContentLoaded', function() {
 
         console.log(`Fetching content for ${currentFile}, page ${pageNum}`);
         try {
-            const response = await fetch(`/extracted-content/${currentFile}/${pageNum}`);
+            console.log(`Fetching content for ${currentFile}, page ${pageNum}`);
+            const response = await fetch(`/extracted-html/${currentFile}/${pageNum}`);
             if (!response.ok) {
                 const errorText = await response.text();
                 throw new Error(`Failed to fetch content: ${response.status} ${errorText}`);
             }
-            const data = await response.json();
-            console.log("Received content data:", data);
-            const htmlContent = data.html_content || '';
+            const htmlContent = await response.text();
+            console.log(`Received HTML for page ${pageNum}, length ${htmlContent.length}`);
+            
+            initEditor(htmlContent, true);
+            isEditingContent = false;
+            editBtn.innerHTML = pencilIconSVG;
+            editBtn.disabled = false;
+            editBtn.classList.remove('opacity-50', 'cursor-not-allowed');
 
-            if (tinymceEditor) {
-                tinymceEditor.setContent(htmlContent);
-            } else {
-                console.warn("loadContentForPage: tinymceEditor was not found, re-initializing (should be rare).");
-                initEditor(htmlContent, !isEditingContent);
-            }
-
-            if (data.status === 'found' || data.status === 'not_found') {
-                const htmlContent = data.html_content || '';
-                if (tinymceEditor) {
-                    tinymceEditor.setContent(htmlContent);
-                    tinymceEditor.mode.set(isEditingContent ? 'design' : 'readonly');
-                } else {
-                    console.warn("loadContentForPage: tinymceEditor not found, initializing now.");
-                    initEditor(htmlContent, !isEditingContent);
-                }
-            } else if (data.status === 'extraction_pending' || !data.html_content) {
-                if (tinymceEditor) tinymceEditor.setContent('<p>Text extraction is pending or not yet available for this page. Please wait or try refreshing.</p>');
-                else contentArea.value = 'Text extraction is pending...';
-                if (!isPdfFullyExtracted && pageNum > highestPageExtractedLocally) {
-                    console.log("Content not found, attempting to trigger extraction for this page specifically.");
-                    await triggerExtraction(currentFile, pageNum);
-                }
-            } else {
-                 if (tinymceEditor) tinymceEditor.setContent('<p>Error loading content.</p>'); else contentArea.value = 'Error loading content.';
+            if (pageInfo && typeof currentPage !== 'undefined' && typeof currentFileTotalPages !== 'undefined') {
+                pageInfo.textContent = `Page ${currentPage} of ${currentFileTotalPages}`;
             }
         } catch (error) {
             console.error("Error fetching content:", error);
@@ -476,9 +435,6 @@ document.addEventListener('DOMContentLoaded', function() {
             currentPage--;
             await renderPdfPage(currentPage);
             await loadContentForPage(currentPage);
-             if (!isPdfFullyExtracted && currentPage > highestPageExtractedLocally) {
-                await triggerExtraction(currentFile, currentPage);
-            }
         }
     });
 
@@ -487,9 +443,6 @@ document.addEventListener('DOMContentLoaded', function() {
             currentPage++;
             await renderPdfPage(currentPage);
             await loadContentForPage(currentPage);
-            if (!isPdfFullyExtracted && currentPage > highestPageExtractedLocally) {
-                await triggerExtraction(currentFile, currentPage);
-            }
         }
     });
     
@@ -499,9 +452,6 @@ document.addEventListener('DOMContentLoaded', function() {
             currentPage = pageNum;
             await renderPdfPage(currentPage);
             await loadContentForPage(currentPage);
-            if (!isPdfFullyExtracted && currentPage > highestPageExtractedLocally) {
-                await triggerExtraction(currentFile, currentPage);
-            }
         } else {
             alert(`Please enter a page number between 1 and ${currentFileTotalPages}.`);
         }
@@ -670,39 +620,48 @@ document.addEventListener('DOMContentLoaded', function() {
         for (let i = 1; i <= currentFileTotalPages; i++) {
             try {
                 console.log(`Export All: Fetching page ${i} of ${currentFileTotalPages}`);
-                 const response = await fetch(`/extracted-content/${currentFile}/${i}`);
+                 const response = await fetch(`/extracted-html/${currentFile}/${i}`);
                  if (response.ok) {
-                    const data = await response.json();
-                    if (data.html_content) {
-                         allHtml += data.html_content + '\\n\\n--- Page Break ---\\n\\n';
+                    const htmlText = await response.text(); // Get HTML as text
+                    if (htmlText) { // Check if HTML text is not empty
+                         allHtml += htmlText + '\n\n--- Page Break ---\n\n';
                     } else {
-                        console.log(`Content for page ${i} not readily available, trying to force extract for export.`);
-                        const forceExtractResp = await fetch(`/force-extract-page/${currentFile}/${i}`, { method: 'POST' });
-                        if (forceExtractResp.ok) {
-                            const forceData = await forceExtractResp.json();
-                            if(forceData.status === 'success'){
-                                const refreshedContentResp = await fetch(`/extracted-content/${currentFile}/${i}`);
-                                if(refreshedContentResp.ok){
-                                    const refreshedData = await refreshedContentResp.json();
-                                    if(refreshedData.html_content){
-                                        allHtml += refreshedData.html_content + '\\n\\n--- Page Break ---\\n\\n';
-                                    } else {
-                                        allHtml += `<!-- Page ${i}: Content could not be extracted -->\\n\\n--- Page Break ---\\n\\n`;
-                                    }
-                                }
-                            } else {
-                                 allHtml += `<!-- Page ${i}: Content could not be extracted (force failed) -->\\n\\n--- Page Break ---\\n\\n`;
-                            }
-                        } else {
-                             allHtml += `<!-- Page ${i}: Content could not be extracted (force endpoint failed) -->\\n\\n--- Page Break ---\\n\\n`;
-                        }
+                        // Handle case where HTML might be empty but response was OK
+                        allHtml += `<!-- Page ${i}: Empty content received -->\n\n--- Page Break ---\n\n`;
                     }
                  } else {
-                    allHtml += `<!-- Page ${i}: Error fetching content -->\\n\\n--- Page Break ---\\n\\n`;
+                    console.log(`Content for page ${i} not readily available, trying to force extract for export.`);
+                    // Keep existing force-extract logic, but ensure it also fetches HTML correctly if successful
+                    const forceExtractResp = await fetch(`/force-extract-page/${currentFile}/${i}`, { method: 'POST' });
+                    if (forceExtractResp.ok) {
+                        // Assuming force-extract-page might return direct HTML or a JSON status
+                        // Let's check content-type or try to parse as text first
+                        const forceResponseContentType = forceExtractResp.headers.get("content-type");
+                        let refreshedHtmlText = '';
+                        if (forceResponseContentType && forceResponseContentType.includes("text/html")){
+                            refreshedHtmlText = await forceExtractResp.text();
+                        } else { // If it's JSON status, then fetch the HTML again
+                            const forceData = await forceExtractResp.json(); // This might fail if it's HTML
+                            if(forceData.status === 'success' || (typeof forceData.detail === 'string' && forceData.detail.includes('extracted')) || forceExtractResp.status === 200 ){
+                                const refreshedContentResp = await fetch(`/extracted-html/${currentFile}/${i}`);
+                                if(refreshedContentResp.ok){
+                                    refreshedHtmlText = await refreshedContentResp.text();
+                                }
+                            }
+                        }
+
+                        if(refreshedHtmlText){
+                            allHtml += refreshedHtmlText + '\n\n--- Page Break ---\n\n';
+                        } else {
+                            allHtml += `<!-- Page ${i}: Content could not be extracted after force attempt -->\n\n--- Page Break ---\n\n`;
+                        }
+                    } else {
+                         allHtml += `<!-- Page ${i}: Content could not be extracted (force endpoint failed with ${forceExtractResp.status}) -->\n\n--- Page Break ---\n\n`;
+                    }
                  }
             } catch (err) {
                 console.error(`Error fetching page ${i} for export:`, err);
-                allHtml += `<!-- Page ${i}: Exception during fetch: ${err.message} -->\\n\\n--- Page Break ---\\n\\n`;
+                allHtml += `<!-- Page ${i}: Exception during fetch: ${err.message} -->\n\n--- Page Break ---\n\n`;
             }
         }
         hideSpinner();
@@ -773,6 +732,20 @@ document.addEventListener('DOMContentLoaded', function() {
         const iframeDoc = editor.getDoc();
         const contentBody = iframeDoc.body;
 
+        // Check if we are viewing JSON, if so, don't scale, ensure scale is 1
+        const jsonViewPre = contentBody.querySelector('pre[data-json-view="true"]');
+        if (jsonViewPre) {
+            console.log("scaleEditorContentToFit: JSON view detected, disabling scaling, setting scale to 1.");
+            contentBody.style.transform = 'scale(1)';
+            contentBody.style.width = 'auto';
+            contentBody.style.height = 'auto';
+            // Ensure the pre tag itself can scroll if its content is too wide/tall
+            jsonViewPre.style.overflow = 'auto'; // Allow scrolling for the pre tag
+            jsonViewPre.style.width = '100%'; // Make pre take full available width
+            jsonViewPre.style.height = '100%'; // Make pre take full available height
+            return; // Skip further scaling logic
+        }
+
         // Reset scale to measure natural dimensions
         contentBody.style.transform = 'scale(1)';
         contentBody.style.width = 'auto'; // Allow natural width based on content
@@ -837,4 +810,188 @@ document.addEventListener('DOMContentLoaded', function() {
         // We want the *content within the body* to be scaled to fit.
     }
 
+    async function loadPageContent(pageNumber) {
+        if (!currentFilename || pageNumber < 1 || pageNumber > currentTotalPages) {
+            console.warn("Invalid page number or no file selected for loadPageContent:", pageNumber);
+            markdownPreview.innerHTML = '<div>Select a PDF and page to view content.</div>'; // Update to innerHTML
+            return;
+        }
+        currentPage = pageNumber;
+        document.getElementById('currentPage').value = currentPage;
+        showSpinner(true, 'page');
+
+        try {
+            // Fetch HTML content instead of Markdown
+            const response = await fetch(`/extracted-html/${currentFilename}/${currentPage}`);
+            if (!response.ok) {
+                const errorData = await response.text(); // Get text for more detailed error
+                throw new Error(`Failed to load HTML for page ${currentPage}: ${response.status} ${errorData}`);
+            }
+            const htmlContent = await response.text();
+            markdownPreview.innerHTML = htmlContent; // Display HTML content
+            markdownPreview.setAttribute('contenteditable', 'true'); // Make it editable
+            saveButton.style.display = 'inline-block';
+            refreshButton.style.display = 'inline-block';
+        } catch (error) {
+            console.error('Error loading page HTML:', error);
+            markdownPreview.innerHTML = `<div>Error loading content: ${error.message}</div>`; // Update to innerHTML
+            markdownPreview.setAttribute('contenteditable', 'false');
+            saveButton.style.display = 'none';
+            // refreshButton.style.display = 'inline-block'; // Keep refresh available
+        } finally {
+            showSpinner(false, 'page');
+        }
+    }
+
+    saveButton.addEventListener('click', async () => {
+        if (!currentFilename || !currentPage) return;
+        showSpinner(true, 'page');
+        const contentToSave = markdownPreview.innerHTML; // Get HTML content
+
+        try {
+            const response = await fetch(`/save-html/${currentFilename}/${currentPage}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ content: contentToSave }),
+            });
+            if (!response.ok) {
+                throw new Error('Failed to save HTML content');
+            }
+            const result = await response.json();
+            console.log('Save successful:', result.detail);
+            // Optionally, provide user feedback (e.g., a temporary "Saved!" message)
+        } catch (error) {
+            console.error('Error saving HTML content:', error);
+            alert(`Error saving content: ${error.message}`);
+        } finally {
+            showSpinner(false, 'page');
+        }
+    });
+
+    refreshButton.addEventListener('click', async () => {
+        if (!currentFilename || !currentPage) return;
+        showSpinner(true, 'page');
+        try {
+            const response = await fetch(`/force-extract-page/${currentFilename}/${currentPage}`, {
+                method: 'POST',
+            });
+            if (!response.ok) {
+                throw new Error('Failed to refresh/re-extract content');
+            }
+            const htmlContent = await response.text();
+            markdownPreview.innerHTML = htmlContent; // Update with re-extracted HTML
+            markdownPreview.setAttribute('contenteditable', 'true');
+        } catch (error) {
+            console.error('Error refreshing content:', error);
+            markdownPreview.innerHTML = `<div>Error refreshing content: ${error.message}</div>`;
+            markdownPreview.setAttribute('contenteditable', 'false');
+        } finally {
+            showSpinner(false, 'page');
+        }
+    });
+
+    // Update Export functionality in app.js
+    document.getElementById('export-current-txt-btn').addEventListener('click', () => {
+        if (currentFilename && currentPage) {
+            window.location.href = `/export/txt/current/${currentFilename}/${currentPage}`;
+        } else {
+            alert('Please select a file and page to export.');
+        }
+    });
+
+    document.getElementById('export-all-txt-btn').addEventListener('click', () => {
+        if (currentFilename) {
+            window.location.href = `/export/txt/all/${currentFilename}`;
+        } else {
+            alert('Please select a file to export.');
+        }
+    });
+
+    // Comment out or remove DOCX export buttons for now if not implementing immediately
+    // document.getElementById('exportCurrentDocx').addEventListener('click', () => { ... });
+    // document.getElementById('exportAllDocx').addEventListener('click', () => { ... });
+
+    // Make sure the markdownPreview element in index.html is a div
+    // e.g., <div id="markdownPreview" class="p-2 border rounded bg-gray-50 min-h-[200px] overflow-auto" contenteditable="false"></div>
+
+    // Event listener for the View JSON button
+    if (viewJsonBtn) {
+        console.log("View JSON button event listener IS BEING ATTACHED.");
+        viewJsonBtn.addEventListener('click', async () => {
+            console.log("View JSON button CLICKED.");
+
+            if (!currentFile || !pdfDoc) {
+                console.log("View JSON: Aborting - no currentFile or pdfDoc.");
+                alert("Please load a PDF first.");
+                return;
+            }
+            console.log("View JSON: currentFile and pdfDoc are present.");
+
+            if (isEditingContent) {
+                console.log("View JSON: In editing mode, prompting user.");
+                if (!confirm("You are currently editing. Viewing JSON will discard unsaved changes to the HTML. Continue?")) {
+                    console.log("View JSON: User chose not to discard edits.");
+                    return;
+                }
+                console.log("View JSON: User confirmed to discard edits. Exiting edit mode.");
+                setEditorMode(false); // Exit editing mode
+            }
+
+            console.log("View JSON: Proceeding to fetch JSON data.");
+            showSpinner("Fetching JSON data...");
+            try {
+                const response = await fetch(`/extracted-json/${currentFile}/${currentPage}`);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error(`View JSON: Fetch failed - Status ${response.status}`, errorText);
+                    throw new Error(`Failed to fetch JSON: ${response.status} ${errorText}`);
+                }
+                const jsonData = await response.json();
+                console.log("View JSON: Successfully fetched JSON data:", jsonData);
+                
+                if (tinymceEditor) {
+                    console.log("View JSON: TinyMCE editor found. Setting content to pretty JSON.");
+                    if (!tinymceEditor.mode.isReadOnly()) {
+                        tinymceEditor.mode.set('readonly');
+                    }
+                    const prettyJson = JSON.stringify(jsonData, null, 2);
+                    tinymceEditor.setContent(`<pre data-json-view="true" style="white-space: pre-wrap; word-wrap: break-word; font-size: 12px;">${escapeHtml(prettyJson)}</pre>`);
+                    
+                    editBtn.disabled = true;
+                    editBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                    editBtn.innerHTML = pencilIconSVG; 
+                    isEditingContent = false; 
+                } else {
+                    console.warn("View JSON: TinyMCE editor NOT found. Using fallback to set contentArea value.");
+                    contentArea.value = JSON.stringify(jsonData, null, 2);
+                    contentArea.readOnly = true;
+                }
+                console.log(`View JSON: Displayed JSON for ${currentFile}, page ${currentPage}`);
+            } catch (error) {
+                console.error("View JSON: Error fetching or displaying JSON:", error);
+                alert(`Error loading JSON: ${error.message}`);
+                if (tinymceEditor) {
+                    tinymceEditor.setContent("<p>Error loading JSON. See console for details.</p>");
+                } else {
+                    contentArea.value = "Error loading JSON. See console for details.";
+                }
+            } finally {
+                console.log("View JSON: Hiding spinner.");
+                hideSpinner();
+            }
+        });
+    } else {
+        console.error("CRITICAL: View JSON button (view-json-btn) not found in DOM! Event listener not attached.");
+    }
+
+    function escapeHtml(unsafe) {
+        return unsafe
+             .replace(/&/g, "&amp;")
+             .replace(/</g, "&lt;")
+             .replace(/>/g, "&gt;")
+             .replace(/"/g, "&quot;")
+             .replace(/'/g, "&#039;");
+    }
 });

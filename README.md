@@ -2,7 +2,68 @@
 
 ## Overview
 
-Xtract is a web application designed to help you convert PDF documents into editable Markdown. It provides a user-friendly interface to upload PDFs, preview them, view extracted text page by page, edit the text, and export the results.
+Xtract is a work-in-progress project aimed at providing a comprehensive solution for extracting information from PDF documents, verifying the extraction, and leveraging Large Language Models (LLMs) for querying the extracted content.
+
+## Core Features / Goals
+
+1.  **Accurate PDF Content Extraction:**
+    *   Robustly extract textual content from diverse PDF layouts.
+    *   Extract information from embedded charts and tables.
+    *   Process and extract relevant information from images within PDFs (e.g., through OCR).
+    *   Obtain positional information (bounding boxes) for each extracted element.
+
+2.  **LLM Integration for Query Answering:**
+    *   Prepare and feed the extracted and verified content to Large Language Models.
+    *   Enable users to ask natural language questions about the PDF content and receive accurate answers.
+
+3.  **User Interface for Verification and Correction:**
+    *   **PDF Viewer:** Display the original PDF document.
+    *   **Extracted Content Panel:** Show the structured text and data extracted from the PDF.
+    *   **Verification & Editing:** Allow users to easily compare the original PDF with the extracted content, identify inaccuracies, and edit/correct the extracted text.
+    *   **Save Corrections:** Persist user corrections to improve the quality of the data fed to the LLM.
+
+4.  **Interactive Bounding Box and Text Highlighting (Next Steps):**
+    *   When an element (text block, image, chart) is selected or hovered over in the PDF view, draw a bounding box around it.
+    *   Simultaneously, the corresponding extracted text/data in the content panel should be highlighted.
+    *   Conversely, selecting or hovering over text in the content panel should highlight the corresponding element in the PDF view.
+
+## Current UI Mockup
+
+The envisioned UI has three main panels:
+
+*   **Left Panel:** File navigation and project management.
+*   **Middle Panel:** PDF document viewer. This panel will eventually support drawing bounding boxes around detected elements.
+*   **Right Panel:** Display area for the extracted text and data. This panel will show the content corresponding to selected elements in the PDF and allow for editing.
+
+![UI Mockup](images/xtract-ui-v1.png)
+
+## Technical Approach & Considerations
+
+### 1. PDF Parsing and Element Recognition:
+*   Leverage advanced OCR and layout parsing libraries. Tools like **`unstructured.io`** (especially its `hi_res` strategy which can utilize models like `Detectron2` for layout detection) are strong candidates for their ability to handle diverse PDF structures and output element-wise data with coordinates.
+*   **`PyMuPDF` (Fitz)** is another powerful Python library for deep PDF manipulation, capable of extracting text, images, and their precise bounding box coordinates. This can be used directly or as a component within a larger extraction pipeline.
+*   The goal is to not just get raw text, but to segment the document into meaningful units (paragraphs, titles, figures, tables, list items) with their locations on the page.
+
+### 2. UI for Verification and Interaction:
+*   **PDF Rendering:** For a web-based UI, **`pdf.js`** by Mozilla is a standard choice for rendering PDFs in the browser. For a desktop application, libraries compatible with the chosen GUI framework (e.g., Qt with Poppler bindings) would be used.
+*   **Bounding Box Overlay:** An overlay canvas on top of the PDF rendering area will be used to draw bounding boxes.
+*   **Text Panel:** The extracted text will be displayed in a separate panel. This could be a rich text editor or a custom component that allows highlighting and editing.
+*   **Synchronization Logic:** JavaScript (for web) or equivalent UI logic will be needed to:
+    *   Map PDF coordinates to screen coordinates for drawing.
+    *   Link elements in the PDF view (via their bounding boxes) to their corresponding text segments in the extraction panel.
+    *   Handle click/hover events on either panel to trigger highlighting in the other.
+
+### 3. Data Flow and Storage:
+*   **Backend:** A Python backend (e.g., using **`FastAPI`** or **`Flask`**) will handle:
+    *   Receiving PDF uploads.
+    *   Running the extraction pipeline (`unstructured`, `PyMuPDF`, etc.).
+    *   Storing the extracted content (text, type of element, page number, coordinates). A structured format like JSON lines or a database would be suitable.
+    *   Serving the PDF and the extracted data to the frontend.
+    *   Receiving and persisting user corrections.
+*   **Frontend:** A modern JavaScript framework (e.g., **`React`**, **`Vue.js`**, or **`Svelte`**) will manage the UI components and interact with the backend via APIs.
+
+### 4. LLM Integration:
+*   Once content is extracted and verified, it will be processed (chunked, embedded) and fed into an LLM framework (e.g., `LangChain`, `LlamaIndex`) for retrieval-augmented generation (RAG) to answer user queries.
 
 ## Key Features
 
